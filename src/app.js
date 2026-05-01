@@ -45,6 +45,10 @@ const cellKey = (x, y) => `${x},${y}`;
 const neighbor = (x, y, dir) => ({ x: x + DIR_DX[dir], y: y + DIR_DY[dir] });
 const inBounds = (x, y, w, h) => x >= 0 && y >= 0 && x < w && y < h;
 
+function isAbsorbArrivalVfxKind(kind) {
+  return kind === 'OUT_ARRIVAL' || kind === 'DELETE_ARRIVAL' || kind === 'HOLD_CAPTURE';
+}
+
 /* ---------- 2. Component definitions ---------- */
 /* Each component:
  *   - id, label, hasRotation, hasConfig, configKind ('char' | 'sink' | 'stream'), defaultConfig
@@ -196,7 +200,7 @@ const LEVELS = [
       { kind: 'OUT', x: 13, y: 5, rotation: 0,         config: 0 },
     ],
     streams: [{ id: 0, chars: 'WIN' }],
-    sinks:   [{ id: 0, target: 'WIN WIN WIN' }],
+    sinks:   [{ id: 0, target: 'WINWINWIN' }],
     palette: ['BELT', 'WRITE', 'COPY', 'HOLD', 'IF'],
   },
 ];
@@ -237,6 +241,7 @@ function createState(level) {
       speed: 1,
       timer: null,
       finished: false,
+      vfx: [],
       historyPast: [],
       historyFuture: [],
     },
@@ -424,6 +429,7 @@ function resetSim(state) {
   stopSimulation(state);
   state.sim.tick = 0;
   state.sim.finished = false;
+  state.sim.vfx = [];
   state.sim.historyPast = [];
   state.sim.historyFuture = [];
   state.items = [];
@@ -460,8 +466,87 @@ function collisionDirectionPriority(dir) {
   return DIRECTION_PRIORITY[dir] || 0;
 }
 
+function tokenAnimMs(state) {
+  return SPEED_MS[state.sim.speed] || 600;
+}
+
 function cloneItems(items) {
   return items.map(item => ({ ...item }));
+}
+
+function resolveNextItems(state, oldItems, winners) {
+  const pool = oldItems.map(item => ({ ...item }));
+  const next = [];
+  for (const w of winners) {
+    const hasDir = typeof w.sourceDir === 'number' && w.sourceDir >= 0;
+    const pred = hasDir
+      ? { x: w.x - DIR_DX[w.sourceDir], y: w.y - DIR_DY[w.sourceDir] }
+      : null;
+
+    let id;
+    let prevX = null;
+    let prevY = null;
+
+    if (pred) {
+      const idx = pool.findIndex(
+        item => item.char === w.char && item.x === pred.x && item.y === pred.y,
+      );
+      if (idx >= 0) {
+        const chosen = pool.splice(idx, 1)[0];
+        id = chosen.id;
+        prevX = pred.x;
+        prevY = pred.y;
+      } else {
+        id = state.nextItemId++;
+        const emitter = [...state.tiles.values()].find(t => t.id === w.fromTileId);
+        if (emitter && emitter.kind === 'IN') {
+          prevX = emitter.x;
+          prevY = emitter.y;
+        } else if (emitter && emitter.kind === 'HOLD') {
+          prevX = emitter.x;
+          prevY = emitter.y;
+        } else {
+          prevX = pred.x;
+          prevY = pred.y;
+        }
+      }
+    } else {
+      const idx = pool.findIndex(
+        item => item.char === w.char && item.x === w.x && item.y === w.y,
+      );
+      if (idx >= 0) {
+        const chosen = pool.splice(idx, 1)[0];
+        id = chosen.id;
+        prevX = w.x;
+        prevY = w.y;
+      } else {
+        id = state.nextItemId++;
+        prevX = w.x;
+        prevY = w.y;
+      }
+    }
+
+    const emitterForPrev = [...state.tiles.values()].find(t => t.id === w.fromTileId);
+    if (emitterForPrev && emitterForPrev.kind === 'HOLD') {
+      const outCell = neighbor(emitterForPrev.x, emitterForPrev.y, emitterForPrev.rotation);
+      if (w.x === outCell.x && w.y === outCell.y) {
+        prevX = emitterForPrev.x;
+        prevY = emitterForPrev.y;
+      }
+    }
+
+    next.push({
+      id,
+      char: w.char,
+      x: w.x,
+      y: w.y,
+      prevX,
+      prevY,
+      fromTileId: w.fromTileId,
+      sourceDir: w.sourceDir,
+    });
+  }
+  return next;
 }
 
 function captureSimSnapshot(state) {
@@ -490,6 +575,7 @@ function captureSimSnapshot(state) {
 function restoreSimSnapshot(state, snap) {
   state.sim.tick = snap.tick;
   state.sim.finished = snap.finished;
+  state.sim.vfx = [];
   state.items = cloneItems(snap.items);
   state.nextItemId = snap.nextItemId;
   for (const stream of state.streams) {
@@ -529,9 +615,89 @@ function outputCellIsClear(state, x, y) {
 
 /* ---------- 5. Simulator ---------- */
 
+function pushAbsorbVfxFromItem(state, kind, item, absorbX, absorbY) {
+  const hasPrev = item.prevX != null && item.prevY != null;
+  const moved = hasPrev && (item.prevX !== absorbX || item.prevY !== absorbY);
+  const fromX = moved ? item.prevX : absorbX;
+  const fromY = moved ? item.prevY : absorbY;
+  state.sim.vfx.push({
+    kind,
+    char: item.char,
+    fromX,
+    fromY,
+    toX: absorbX,
+    toY: absorbY,
+    moved,
+  });
+}
+
+/** Merge-phase or stationary absorb: OUT / DELETE / (shared geometry for HOLD capture uses pushAbsorbVfxFromItem). */
+function pushArrivalAbsorbVfx(state, kind, winner, oldItems) {
+  const hasDir = typeof winner.sourceDir === 'number' && winner.sourceDir >= 0;
+  const pred = hasDir
+    ? { x: winner.x - DIR_DX[winner.sourceDir], y: winner.y - DIR_DY[winner.sourceDir] }
+    : null;
+
+  let fromX = winner.x;
+  let fromY = winner.y;
+  let moved = false;
+
+  if (pred && inBounds(pred.x, pred.y, state.level.gridW, state.level.gridH)) {
+    const idx = oldItems.findIndex(
+      it => it.char === winner.char && it.x === pred.x && it.y === pred.y,
+    );
+    if (idx >= 0) {
+      fromX = pred.x;
+      fromY = pred.y;
+      moved = true;
+    } else {
+      const emitter = [...state.tiles.values()].find(t => t.id === winner.fromTileId);
+      if (emitter && emitter.kind === 'IN') {
+        fromX = emitter.x;
+        fromY = emitter.y;
+        moved = true;
+      } else if (emitter && emitter.kind === 'HOLD') {
+        fromX = emitter.x;
+        fromY = emitter.y;
+        moved = true;
+      } else {
+        fromX = pred.x;
+        fromY = pred.y;
+        moved = true;
+      }
+    }
+  } else if (pred && !inBounds(pred.x, pred.y, state.level.gridW, state.level.gridH)) {
+    const emitter = [...state.tiles.values()].find(t => t.id === winner.fromTileId);
+    if (emitter && emitter.kind === 'IN') {
+      fromX = emitter.x;
+      fromY = emitter.y;
+      moved = true;
+    } else if (emitter && emitter.kind === 'HOLD') {
+      fromX = emitter.x;
+      fromY = emitter.y;
+      moved = true;
+    } else {
+      fromX = winner.x;
+      fromY = winner.y;
+      moved = false;
+    }
+  }
+
+  state.sim.vfx.push({
+    kind,
+    char: winner.char,
+    fromX,
+    fromY,
+    toX: winner.x,
+    toY: winner.y,
+    moved,
+  });
+}
+
 function step(state) {
   if (state.sim.finished) return;
   const { level, tiles, items, sinks, streams, stats } = state;
+  state.sim.vfx = [];
 
   // emissions: array of { char, x, y, fromTileId, sourceDir }
   const emissions = [];
@@ -573,8 +739,10 @@ function step(state) {
       // HOLD has capacity 1. If still occupied, the incoming item is dropped.
       // This prevents newer chars from overwriting buffered chars.
       if (tile.held === null) {
+        pushAbsorbVfxFromItem(state, 'HOLD_CAPTURE', item, tile.x, tile.y);
         tile.held = item.char;
       } else {
+        pushAbsorbVfxFromItem(state, 'DELETE_ARRIVAL', item, tile.x, tile.y);
         stats.totalDestroyed++;
       }
       continue;
@@ -584,6 +752,13 @@ function step(state) {
       // OUT or unknown: handled in resolve as "destination"
       // If item lands on an OUT cell (already there), absorb it.
       if (tile.kind === 'OUT') {
+        pushArrivalAbsorbVfx(state, 'OUT_ARRIVAL', {
+          char: item.char,
+          x: item.x,
+          y: item.y,
+          fromTileId: item.fromTileId,
+          sourceDir: -1,
+        }, items);
         const sink = sinks.find(s => s.id === tile.config);
         if (sink) sink.output += item.char;
         stats.distinctOut.add(item.char);
@@ -593,6 +768,9 @@ function step(state) {
       continue;
     }
     const result = def.act(tile, item, ctx);
+    if (tile.kind === 'DELETE' && result.destroyed) {
+      pushAbsorbVfxFromItem(state, 'DELETE_ARRIVAL', item, tile.x, tile.y);
+    }
     for (const e of result.emissions) {
       const t = neighbor(tile.x, tile.y, e.dir);
       emissions.push({ char: e.char, x: t.x, y: t.y, fromTileId: e.fromTileId, sourceDir: e.dir });
@@ -627,7 +805,7 @@ function step(state) {
     byCell.get(k).push(e);
   }
 
-  const newItems = [];
+  const winnerItems = [];
   for (const [k, list] of byCell) {
     let winner;
     if (list.length === 1) {
@@ -640,26 +818,27 @@ function step(state) {
     }
     const tile = tileAtCell(state, winner.x, winner.y);
     if (tile && tile.kind === 'OUT') {
+      pushArrivalAbsorbVfx(state, 'OUT_ARRIVAL', winner, items);
       const sink = sinks.find(s => s.id === tile.config);
       if (sink) sink.output += winner.char;
       stats.distinctOut.add(winner.char);
       continue;
     }
     if (tile && tile.kind === 'DELETE') {
+      pushArrivalAbsorbVfx(state, 'DELETE_ARRIVAL', winner, items);
       stats.totalDestroyed++;
       continue;
     }
-    newItems.push({
-      id: state.nextItemId++,
+    winnerItems.push({
       char: winner.char,
-      x: winner.x, y: winner.y,
-      prevX: null, prevY: null, // animation src is set by renderer
+      x: winner.x,
+      y: winner.y,
       fromTileId: winner.fromTileId,
       sourceDir: winner.sourceDir,
     });
   }
 
-  state.items = newItems;
+  state.items = resolveNextItems(state, items, winnerItems);
   state.sim.tick++;
   if (state.items.length > stats.maxItemsOnBoard) stats.maxItemsOnBoard = state.items.length;
 
@@ -705,7 +884,7 @@ function svg(el, attrs, ...children) {
   return node;
 }
 
-function cellPx() { return 56; }
+function cellPx() { return 72; }
 
 function rotationTransform(rotation, cx, cy) {
   const deg = rotation * 90;
@@ -715,6 +894,9 @@ function rotationTransform(rotation, cx, cy) {
 function drawTileShape(tile, opts) {
   const cp = cellPx();
   const cx = cp / 2, cy = cp / 2;
+  // Place arrow tips at the inner frame edge (frame rect is inset by 4px on each side).
+  const arrowTip = cp / 2 - 4;
+  const beltShaftInner = arrowTip - 10;
   const isGhost = opts && opts.ghost;
   const klassFrame = isGhost ? 'ghost-frame' : 'tile-frame' + (tile.immovable ? ' fixed' : '');
   const klassArrow = isGhost ? 'ghost-arrow' : 'tile-arrow';
@@ -731,7 +913,7 @@ function drawTileShape(tile, opts) {
       g.appendChild(svg('circle', { cx, cy, r, class: klassFrame }));
       g.appendChild(svg('circle', { cx, cy, r: r - 6, class: 'tile-stroke' }));
       g.appendChild(svg('text', { x: cx, y: cy - 1, class: klassLabel + ' tile-label-large' }, 'IN'));
-      const tri = drawArrowTri(cx + cp * 0.18, cy, klassArrow);
+      const tri = drawArrowTri(cx + arrowTip, cy, klassArrow);
       tri.setAttribute('transform', rotationTransform(tile.rotation, cx, cy));
       g.appendChild(tri);
       break;
@@ -744,12 +926,12 @@ function drawTileShape(tile, opts) {
       break;
     }
     case 'BELT': {
-      const tri = drawArrowTri(cx + cp * 0.22, cy, klassArrow);
+      const tri = drawArrowTri(cx + arrowTip, cy, klassArrow);
       tri.setAttribute('transform', rotationTransform(tile.rotation, cx, cy));
       g.appendChild(tri);
       // a thin shaft line
       const shaft = svg('line', {
-        x1: cx - cp * 0.22, y1: cy, x2: cx + cp * 0.18, y2: cy,
+        x1: cx - beltShaftInner, y1: cy, x2: cx + arrowTip - 1, y2: cy,
         class: 'tile-stroke',
         transform: rotationTransform(tile.rotation, cx, cy),
       });
@@ -758,7 +940,7 @@ function drawTileShape(tile, opts) {
     }
     case 'WRITE': {
       // Square with a triangle output
-      const tri = drawArrowTri(cx + cp * 0.22, cy, klassArrow);
+      const tri = drawArrowTri(cx + arrowTip, cy, klassArrow);
       tri.setAttribute('transform', rotationTransform(tile.rotation, cx, cy));
       g.appendChild(tri);
       g.appendChild(svg('text', { x: cx, y: cy - 6, class: klassLabel }, 'WRITE'));
@@ -777,10 +959,10 @@ function drawTileShape(tile, opts) {
     case 'COPY': {
       // T-shape: trunk in rotation dir, arm in (rotation+1)
       const armDir = (tile.rotation + 1) % 4;
-      const trunkArrow = drawArrowTri(cx + cp * 0.22, cy, klassArrow);
+      const trunkArrow = drawArrowTri(cx + arrowTip, cy, klassArrow);
       trunkArrow.setAttribute('transform', rotationTransform(tile.rotation, cx, cy));
       g.appendChild(trunkArrow);
-      const armArrow = drawArrowTri(cx + cp * 0.22, cy, klassArrow);
+      const armArrow = drawArrowTri(cx + arrowTip, cy, klassArrow);
       armArrow.setAttribute('transform', rotationTransform(armDir, cx, cy));
       g.appendChild(armArrow);
       g.appendChild(svg('text', { x: cx, y: cy + cp * 0.02, class: klassLabel }, 'COPY'));
@@ -789,10 +971,10 @@ function drawTileShape(tile, opts) {
     case 'IF': {
       // Two outputs like COPY but labelled with predicate
       const armDir = (tile.rotation + 1) % 4;
-      const trunkArrow = drawArrowTri(cx + cp * 0.22, cy, klassArrow);
+      const trunkArrow = drawArrowTri(cx + arrowTip, cy, klassArrow);
       trunkArrow.setAttribute('transform', rotationTransform(tile.rotation, cx, cy));
       g.appendChild(trunkArrow);
-      const armArrow = drawArrowTri(cx + cp * 0.22, cy, klassArrow);
+      const armArrow = drawArrowTri(cx + arrowTip, cy, klassArrow);
       armArrow.setAttribute('transform', rotationTransform(armDir, cx, cy));
       g.appendChild(armArrow);
       g.appendChild(svg('text', { x: cx, y: cy - 6, class: klassLabel }, 'IF'));
@@ -808,11 +990,12 @@ function drawTileShape(tile, opts) {
         width: sz, height: sz,
         class: 'tile-stroke',
       }));
-      const tri = drawArrowTri(cx + cp * 0.22, cy, klassArrow);
+      const tri = drawArrowTri(cx + arrowTip, cy, klassArrow);
       tri.setAttribute('transform', rotationTransform(tile.rotation, cx, cy));
       g.appendChild(tri);
       g.appendChild(svg('text', { x: cx, y: cy + cp * 0.32, class: klassLabel }, 'HOLD'));
       if (tile.held !== null) {
+        g.appendChild(svg('circle', { cx, cy, r: cp * 0.17, class: 'held-badge' }));
         g.appendChild(svg('text', { x: cx, y: cy, class: 'held-glyph' }, glyphForChar(tile.held)));
       }
       break;
@@ -835,6 +1018,237 @@ function glyphForChar(c) {
   return c;
 }
 
+function svgClear(el) {
+  while (el.firstChild) el.removeChild(el.firstChild);
+}
+
+function svgTranslate(x, y) {
+  return `translate(${x} ${y})`;
+}
+
+function cellTopLeftPx(cp, x, y) {
+  return { x: x * cp, y: y * cp };
+}
+
+function cellCenterPx(cp, x, y) {
+  return { x: x * cp + cp / 2, y: y * cp + cp / 2 };
+}
+
+function assertItemCellsHaveTiles(state, item) {
+  if (!tileAtCell(state, item.x, item.y)) {
+    console.error('[builder] Item sits on a cell without a tile.', item);
+  }
+  if (item.prevX != null && item.prevY != null && !tileAtCell(state, item.prevX, item.prevY)) {
+    console.error('[builder] Item animation anchor (prev) is not a tiled cell.', item);
+  }
+}
+
+function itemsRenderSignature(state) {
+  // Used to avoid rebuilding the items layer on unrelated UI renders (hover, popovers).
+  const parts = [];
+  parts.push(String(state.sim.tick));
+  for (const v of state.sim.vfx || []) {
+    parts.push(`${v.kind}:${v.char}:${v.fromX},${v.fromY}->${v.toX},${v.toY}:${v.moved ? '1' : '0'}`);
+  }
+  for (const it of state.items) {
+    parts.push(
+      `${it.id}:${it.char}:${it.x},${it.y}:${it.prevX ?? ''},${it.prevY ?? ''}`,
+    );
+  }
+  return parts.join('|');
+}
+
+function ensureBoardLayers(hostBoard) {
+  let layerGrid = hostBoard.querySelector('#layer-grid');
+  let layerTiles = hostBoard.querySelector('#layer-tiles');
+  let layerHover = hostBoard.querySelector('#layer-hover');
+  let layerItems = hostBoard.querySelector('#layer-items');
+
+  if (layerGrid && layerTiles && layerHover && layerItems) {
+    return { layerGrid, layerTiles, layerHover, layerItems };
+  }
+
+  hostBoard.textContent = '';
+  layerGrid = svg('g', { id: 'layer-grid' });
+  layerTiles = svg('g', { id: 'layer-tiles' });
+  layerHover = svg('g', { id: 'layer-hover' });
+  layerItems = svg('g', { id: 'layer-items' });
+  hostBoard.appendChild(layerGrid);
+  hostBoard.appendChild(layerTiles);
+  hostBoard.appendChild(layerHover);
+  hostBoard.appendChild(layerItems);
+  return { layerGrid, layerTiles, layerHover, layerItems };
+}
+
+function renderGridDots(layerGrid, state, cp) {
+  for (let y = 0; y <= state.level.gridH; y++) {
+    for (let x = 0; x <= state.level.gridW; x++) {
+      layerGrid.appendChild(svg('circle', { cx: x * cp, cy: y * cp, r: 1.8, class: 'cell-dot' }));
+    }
+  }
+}
+
+function renderTiles(layerTiles, state, cp) {
+  for (const tile of state.tiles.values()) {
+    const g = drawTileShape(tile, {});
+    const p = cellTopLeftPx(cp, tile.x, tile.y);
+    g.setAttribute('transform', svgTranslate(p.x, p.y));
+    g.dataset && (g.dataset.tileId = String(tile.id));
+    g.setAttribute('data-tile-id', String(tile.id));
+    if (state.ui.popoverTileId === tile.id) {
+      const frame = g.querySelector('.tile-frame');
+      if (frame) frame.classList.add('popover-target');
+    }
+    layerTiles.appendChild(g);
+  }
+}
+
+function renderHover(layerHover, state, cp) {
+  if (!state.ui.hoverCell) return;
+  const { x, y } = state.ui.hoverCell;
+  if (!inBounds(x, y, state.level.gridW, state.level.gridH)) return;
+
+  const existing = tileAtCell(state, x, y);
+  if (!existing && state.ui.brush) {
+    const ghostTile = {
+      id: 0,
+      kind: state.ui.brush.kind,
+      x,
+      y,
+      rotation: state.ui.brush.rotation,
+      config: state.ui.brush.config,
+      immovable: false,
+      held: null,
+    };
+    const g = drawTileShape(ghostTile, { ghost: true });
+    const p = cellTopLeftPx(cp, x, y);
+    g.setAttribute('transform', svgTranslate(p.x, p.y));
+    layerHover.appendChild(g);
+    return;
+  }
+
+  if (existing) {
+    layerHover.appendChild(svg('rect', {
+      x: x * cp + 3,
+      y: y * cp + 3,
+      width: cp - 6,
+      height: cp - 6,
+      class: 'hover-occupied',
+    }));
+  }
+}
+
+function renderItems(layerItems, state, cp, tickMs) {
+  const half = Math.max(1, Math.floor(tickMs / 2));
+  for (const item of state.items) {
+    assertItemCellsHaveTiles(state, item);
+
+    const to = cellCenterPx(cp, item.x, item.y);
+    const hasPrev = item.prevX != null && item.prevY != null;
+    const from = hasPrev ? cellCenterPx(cp, item.prevX, item.prevY) : to;
+    const moved = hasPrev && (item.prevX !== item.x || item.prevY !== item.y);
+    const prevTile = hasPrev ? tileAtCell(state, item.prevX, item.prevY) : null;
+    const spawnFromIn = prevTile && prevTile.kind === 'IN' && (moved || (item.prevX === item.x && item.prevY === item.y));
+    const spawnFromHold = prevTile && prevTile.kind === 'HOLD' && (moved || (item.prevX === item.x && item.prevY === item.y));
+    const toTile = tileAtCell(state, item.x, item.y);
+    const despawnToOut = toTile && toTile.kind === 'OUT' && (moved || (item.prevX === item.x && item.prevY === item.y));
+
+    const g = svg('g', { class: 'item-group', 'data-item-id': String(item.id) });
+    g.appendChild(svg('circle', { cx: 0, cy: 0, r: cp * 0.30, class: 'item-circle' }));
+    g.appendChild(svg('text', { x: 0, y: 1, class: 'item-glyph' }, glyphForChar(item.char)));
+    layerItems.appendChild(g);
+
+    // Animate via CSS `transform` (translate + scale) in pixel units.
+    // transform-origin is the token's local origin (0,0), i.e. the cell center after translate().
+    g.setAttribute('transform', '');
+    g.style.transition = 'none';
+    g.style.transformOrigin = '0px 0px';
+
+    if (spawnFromIn || spawnFromHold) {
+      // Spawn: first half tick scales up at IN/HOLD center; second half tick moves to next cell center.
+      g.style.transform = `translate(${from.x}px, ${from.y}px) scale(0)`;
+      requestAnimationFrame(() => {
+        g.style.transition = `transform ${half}ms linear`;
+        g.style.transform = `translate(${from.x}px, ${from.y}px) scale(1)`;
+      });
+      if (moved) {
+        setTimeout(() => {
+          g.style.transition = `transform ${half}ms linear`;
+          g.style.transform = `translate(${to.x}px, ${to.y}px) scale(1)`;
+        }, half);
+      }
+      continue;
+    }
+
+    if (despawnToOut) {
+      if (moved) {
+        // (a) despawn: first half tick moves to OUT center; second half tick scales down at OUT center.
+        g.style.transform = `translate(${from.x}px, ${from.y}px) scale(1)`;
+        requestAnimationFrame(() => {
+          g.style.transition = `transform ${half}ms linear`;
+          g.style.transform = `translate(${to.x}px, ${to.y}px) scale(1)`;
+        });
+        setTimeout(() => {
+          g.style.transition = `transform ${half}ms linear`;
+          g.style.transform = `translate(${to.x}px, ${to.y}px) scale(0)`;
+        }, half);
+      } else {
+        // Absorbed while already sitting on OUT: scale down in place for the full tick.
+        g.style.transform = `translate(${to.x}px, ${to.y}px) scale(1)`;
+        requestAnimationFrame(() => {
+          g.style.transition = `transform ${tickMs}ms linear`;
+          g.style.transform = `translate(${to.x}px, ${to.y}px) scale(0)`;
+        });
+      }
+      continue;
+    }
+
+    // (b) normal move: smooth translate between two cell centers (no scale).
+    g.style.transform = `translate(${from.x}px, ${from.y}px) scale(1)`;
+    if (moved) {
+      requestAnimationFrame(() => {
+        g.style.transition = `transform ${tickMs}ms linear`;
+        g.style.transform = `translate(${to.x}px, ${to.y}px) scale(1)`;
+      });
+    } else {
+      g.style.transform = `translate(${to.x}px, ${to.y}px) scale(1)`;
+    }
+  }
+
+  for (const v of state.sim.vfx || []) {
+    if (!isAbsorbArrivalVfxKind(v.kind)) continue;
+    const from = cellCenterPx(cp, v.fromX, v.fromY);
+    const to = cellCenterPx(cp, v.toX, v.toY);
+
+    const g = svg('g', { class: 'item-group item-vfx' });
+    g.appendChild(svg('circle', { cx: 0, cy: 0, r: cp * 0.30, class: 'item-circle' }));
+    g.appendChild(svg('text', { x: 0, y: 1, class: 'item-glyph' }, glyphForChar(v.char)));
+    layerItems.appendChild(g);
+
+    g.setAttribute('transform', '');
+    g.style.transition = 'none';
+    g.style.transformOrigin = '0px 0px';
+
+    if (v.moved) {
+      g.style.transform = `translate(${from.x}px, ${from.y}px) scale(1)`;
+      requestAnimationFrame(() => {
+        g.style.transition = `transform ${half}ms linear`;
+        g.style.transform = `translate(${to.x}px, ${to.y}px) scale(1)`;
+      });
+      setTimeout(() => {
+        g.style.transition = `transform ${half}ms linear`;
+        g.style.transform = `translate(${to.x}px, ${to.y}px) scale(0)`;
+      }, half);
+    } else {
+      g.style.transform = `translate(${to.x}px, ${to.y}px) scale(1)`;
+      requestAnimationFrame(() => {
+        g.style.transition = `transform ${tickMs}ms linear`;
+        g.style.transform = `translate(${to.x}px, ${to.y}px) scale(0)`;
+      });
+    }
+  }
+}
+
 function renderBoard(state, hostBoard) {
   const cp = cellPx();
   const w = state.level.gridW * cp;
@@ -842,70 +1256,30 @@ function renderBoard(state, hostBoard) {
   hostBoard.setAttribute('width',  w);
   hostBoard.setAttribute('height', h);
   hostBoard.setAttribute('viewBox', `0 0 ${w} ${h}`);
-  hostBoard.innerHTML = '';
 
-  // Grid dots at each intersection
-  for (let y = 0; y <= state.level.gridH; y++) {
-    for (let x = 0; x <= state.level.gridW; x++) {
-      hostBoard.appendChild(svg('circle', { cx: x * cp, cy: y * cp, r: 1.8, class: 'cell-dot' }));
-    }
+  const tickMs = tokenAnimMs(state);
+
+  const sig = itemsRenderSignature(state);
+  const prevSig = hostBoard.dataset.itemsSig || '';
+
+  const { layerGrid, layerTiles, layerHover, layerItems } = ensureBoardLayers(hostBoard);
+
+  svgClear(layerGrid);
+  svgClear(layerTiles);
+  svgClear(layerHover);
+  if (sig !== prevSig) {
+    svgClear(layerItems);
+    hostBoard.dataset.itemsSig = sig;
   }
 
-  // Tiles
-  for (const tile of state.tiles.values()) {
-    const g = drawTileShape(tile, {});
-    g.setAttribute('transform', `translate(${tile.x * cp} ${tile.y * cp})`);
-    g.dataset && (g.dataset.tileId = String(tile.id));
-    g.setAttribute('data-tile-id', String(tile.id));
-    if (state.ui.popoverTileId === tile.id) {
-      const frame = g.querySelector('.tile-frame');
-      if (frame) frame.classList.add('popover-target');
-    }
-    hostBoard.appendChild(g);
-  }
+  renderGridDots(layerGrid, state, cp);
+  renderTiles(layerTiles, state, cp);
+  renderHover(layerHover, state, cp);
 
-  // Hover cues: ghost preview only for empty cells; occupied cells get a highlight box.
-  if (state.ui.hoverCell) {
-    const { x, y } = state.ui.hoverCell;
-    if (inBounds(x, y, state.level.gridW, state.level.gridH)) {
-      const existing = tileAtCell(state, x, y);
-      if (!existing && state.ui.brush) {
-        const ghostTile = {
-          id: 0,
-          kind: state.ui.brush.kind,
-          x,
-          y,
-          rotation: state.ui.brush.rotation,
-          config: state.ui.brush.config,
-          immovable: false,
-          held: null,
-        };
-        const g = drawTileShape(ghostTile, { ghost: true });
-        g.setAttribute('transform', `translate(${x * cp} ${y * cp})`);
-        hostBoard.appendChild(g);
-      } else if (existing) {
-        hostBoard.appendChild(svg('rect', {
-          x: x * cp + 3,
-          y: y * cp + 3,
-          width: cp - 6,
-          height: cp - 6,
-          class: 'hover-occupied',
-        }));
-      }
-    }
-  }
-
-  // Items: draw each at (x,y) center, animating from prev if set
-  const tickMs = SPEED_MS[state.sim.speed] || 600;
-  hostBoard.style.setProperty('--tick-ms', tickMs + 'ms');
-  for (const item of state.items) {
-    const cx = item.x * cp + cp / 2;
-    const cy = item.y * cp + cp / 2;
-    const g = svg('g', { class: 'item-group' });
-    g.appendChild(svg('circle', { cx: 0, cy: 0, r: cp * 0.30, class: 'item-circle' }));
-    g.appendChild(svg('text',   { x: 0, y: 1, class: 'item-glyph' }, glyphForChar(item.char)));
-    g.setAttribute('transform', `translate(${cx} ${cy})`);
-    hostBoard.appendChild(g);
+  // Items: token transforms are ALWAYS cell centers: (x + 0.5) * cp.
+  // Between ticks, we only interpolate between two cell centers (prev -> current).
+  if (sig !== prevSig) {
+    renderItems(layerItems, state, cp, tickMs);
   }
 }
 

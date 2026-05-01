@@ -274,7 +274,7 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 .tile-arrow { fill: var(--fg); stroke: none; }
 .tile-label {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 9px;
+  font-size: 10px;
   letter-spacing: 0.1em;
   fill: var(--fg);
   text-anchor: middle;
@@ -282,7 +282,7 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   pointer-events: none;
 }
 .tile-label-large {
-  font-size: 14px;
+  font-size: 18px;
   font-weight: normal;
   letter-spacing: 0.05em;
 }
@@ -301,18 +301,27 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 .item-circle { fill: var(--bg); stroke: var(--fg); stroke-width: 1.5; }
 .item-glyph {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 18px;
+  font-size: 22px;
   fill: var(--fg);
   text-anchor: middle;
   dominant-baseline: central;
   pointer-events: none;
 }
-.item-group { transition: transform var(--tick-ms, 600ms) linear; }
+.item-group {
+  /* Actual per-tick easing is controlled inline in JS (spawn/move/despawn split). */
+  will-change: transform;
+}
+
+.held-badge {
+  fill: var(--fg);
+  stroke: var(--fg);
+  stroke-width: 1;
+}
 
 .held-glyph {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 9px;
-  fill: var(--fg);
+  font-size: 16px;
+  fill: var(--bg);
   text-anchor: middle;
   dominant-baseline: central;
   pointer-events: none;
