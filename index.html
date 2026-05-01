@@ -19,8 +19,8 @@
   <div id="screen-game" class="screen hidden">
     <header class="topbar">
       <button id="btn-menu" class="icon-btn" title="menu">≡</button>
-      <button id="btn-rotate" class="icon-btn" title="rotate hovered">rot [f]</button>
-      <button id="btn-delete" class="icon-btn" title="delete hovered">del [r]</button>
+      <button id="btn-rotate" class="icon-btn" title="rotate hovered">rot [r]</button>
+      <button id="btn-delete" class="icon-btn" title="delete hovered">del [d]</button>
       <button id="btn-clear" class="icon-btn" title="clear board">clear [bksp]</button>
       <button id="btn-undo" class="icon-btn" title="undo">undo [z]</button>
       <button id="btn-redo" class="icon-btn" title="redo">redo [x]</button>
@@ -50,6 +50,7 @@
     </aside>
 
     <footer class="bottombar">
+      <button id="btn-reset" class="ctl-btn ctl-reset">reset [q]</button>
       <button id="btn-step-back" class="ctl-btn">back [n]</button>
       <button id="btn-step" class="ctl-btn">step [m]</button>
       <button id="btn-play" class="ctl-btn ctl-play">▶ play [space]</button>
@@ -102,7 +103,7 @@
         <li>Right-click a placed tile to rotate it. Click it for more options.</li>
         <li>Drag a placed tile onto the palette area to delete it.</li>
         <li>Hotkeys: <b>1…0</b> and <b>Shift+1…0</b> select/place palette tiles. <b>Tab</b>/<b>Shift+Tab</b> cycles palette.</li>
-        <li>Sim hotkeys (shown in buttons): <b>Space</b> play/pause, <b>M</b> step forward, <b>N</b> step backward, <b>F</b> rotate hovered tile, <b>R</b>/<b>D</b> delete hovered tile, <b>Backspace/Delete</b> clear board, <b>Z</b> undo, <b>X</b> redo, <b>+</b>/<b>-</b> speed.</li>
+        <li>Sim hotkeys (shown in buttons): <b>Space</b> play/pause, <b>Q</b> reset sim, <b>M</b> step forward, <b>N</b> step backward, <b>R</b> rotate hovered tile, <b>D</b> delete hovered tile, <b>Backspace/Delete</b> clear board, <b>Z</b> undo, <b>X</b> redo, <b>+</b>/<b>-</b> speed.</li>
         <li>Press <b>play</b> to run the simulator. Match the target output to win.</li>
       </ol>
       <div class="modal-actions">

@@ -362,7 +362,12 @@ function applyBoardSnapshot(state, board) {
 
 function setPlayIdleLabel() {
   const btn = document.getElementById('btn-play');
-  if (btn) btn.textContent = '▶ play';
+  if (btn) btn.textContent = '▶ play [space]';
+}
+
+function setPlayRunningLabel() {
+  const btn = document.getElementById('btn-play');
+  if (btn) btn.textContent = 'pause [space]';
 }
 
 function stopSimulation(state) {
@@ -565,8 +570,13 @@ function step(state) {
         emissions.push({ char: tile.held, x: t.x, y: t.y, fromTileId: tile.id, sourceDir: tile.rotation });
         tile.held = null;
       }
-      // Incoming item replaces current held content after optional release.
-      tile.held = item.char;
+      // HOLD has capacity 1. If still occupied, the incoming item is dropped.
+      // This prevents newer chars from overwriting buffered chars.
+      if (tile.held === null) {
+        tile.held = item.char;
+      } else {
+        stats.totalDestroyed++;
+      }
       continue;
     }
     const def = COMPONENTS[tile.kind];
@@ -925,8 +935,8 @@ function attachBoardInput(boardEl) {
 
     if (e.button !== 0) return;
 
-    // If clicking a placed (non-immovable) tile and no brush is active -> start drag-or-popover
-    if (tile && !APP.state.ui.brush) {
+    // Clicking a placed (non-immovable) tile opens drag-or-popover even when a brush is active.
+    if (tile) {
       // Set up a candidate drag: if mouse moves > threshold, drag-move; otherwise popover
       const startX = e.clientX, startY = e.clientY;
       let dragged = false;
@@ -1415,6 +1425,7 @@ function charsForLevel(level) {
 function attachUI() {
   document.getElementById('btn-step').onclick   = () => doStep();
   document.getElementById('btn-step-back').onclick = () => doStepBack();
+  document.getElementById('btn-reset').onclick  = () => doReset();
   document.getElementById('btn-play').onclick   = () => doPlayPause();
   document.getElementById('btn-rotate').onclick = () => doRotateHoveredTileOrBrush();
   document.getElementById('btn-clear').onclick  = () => doClearBoard();
@@ -1457,6 +1468,11 @@ function attachUI() {
     if (e.key === ' ' || e.code === 'Space') {
       e.preventDefault();
       doPlayPause();
+      return;
+    }
+    if (e.key === 'q' || e.key === 'Q') {
+      e.preventDefault();
+      doReset();
       return;
     }
 
@@ -1504,13 +1520,13 @@ function attachUI() {
       return;
     }
 
-    if (e.key === 'f' || e.key === 'F') {
+    if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
       doRotateHoveredTileOrBrush();
       return;
     }
 
-    if (e.key === 'r' || e.key === 'R' || e.key === 'd' || e.key === 'D') {
+    if (e.key === 'd' || e.key === 'D') {
       e.preventDefault();
       if (deleteHoveredTile()) APP.render();
     }
@@ -1619,17 +1635,17 @@ function doPlayPause() {
   if (sim.finished) return;
   if (sim.running) {
     stopSimulation(APP.state);
-    document.getElementById('btn-play').textContent = '▶ play';
+    setPlayIdleLabel();
   } else {
     sim.running = true;
-    document.getElementById('btn-play').textContent = 'pause';
+    setPlayRunningLabel();
     sim.timer = setInterval(simTickIfPlaying, SPEED_MS[sim.speed]);
   }
 }
 
 function doReset() {
   resetSim(APP.state);
-  document.getElementById('btn-play').textContent = '▶ play';
+  setPlayIdleLabel();
   APP.render();
 }
 
@@ -1683,7 +1699,7 @@ function decreaseSpeed() {
 }
 
 function handleSimEnd(result) {
-  document.getElementById('btn-play').textContent = '▶ play';
+  setPlayIdleLabel();
   if (result.won) {
     const m = metrics(APP.state);
     const best = Storage.getBest(APP.state.level.id);

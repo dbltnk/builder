@@ -182,6 +182,7 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 }
 
 .ctl-btn { min-width: 72px; }
+.ctl-reset { margin-right: auto; }
 
 .speed-picker {
   display: inline-flex;
