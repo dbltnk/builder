@@ -3,32 +3,23 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>BUILDER</title>
+  <title>STREAMS</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-  <div id="screen-title" class="screen">
-    <div class="title-wordmark">B U I L D E R</div>
-    <div id="level-grid"></div>
-    <div class="title-foot">
-      <button id="btn-howto" class="text-btn">how to play</button>
-    </div>
-  </div>
-
-  <div id="screen-game" class="screen hidden">
+  <div id="screen-game" class="screen">
     <header class="topbar">
-      <button id="btn-menu" class="icon-btn" title="menu">≡</button>
-      <button id="btn-rotate" class="icon-btn" title="rotate hovered">rot [r]</button>
-      <button id="btn-delete" class="icon-btn" title="delete hovered">del [d]</button>
-      <button id="btn-clear" class="icon-btn" title="clear board">clear [bksp]</button>
-      <button id="btn-undo" class="icon-btn" title="undo">undo [z]</button>
-      <button id="btn-redo" class="icon-btn" title="redo">redo [x]</button>
-      <div id="level-title" class="level-title"></div>
+      <button id="btn-rotate" class="icon-btn" type="button" title="rotate hovered">rot [r]</button>
+      <button id="btn-delete" class="icon-btn" type="button" title="delete hovered">del [d]</button>
+      <button id="btn-clear" class="icon-btn" type="button" title="clear board">clear [bksp]</button>
+      <button id="btn-undo" class="icon-btn" type="button" title="undo">undo [z]</button>
+      <button id="btn-redo" class="icon-btn" type="button" title="redo">redo [x]</button>
+      <div id="level-title" class="level-title">sandbox</div>
       <div class="metrics-readout">
-        <span class="metric"><label>cycles</label><b id="m-cycles">0</b></span>
-        <span class="metric"><label>cmps</label><b id="m-cmps">0</b></span>
-        <span class="metric"><label>ftp</label><b id="m-ftp">0</b></span>
+        <span class="metric"><label>time</label><b id="m-time">0</b></span>
+        <span class="metric"><label>dots</label><b id="m-dots">0</b></span>
+        <span class="metric"><label>fps</label><b id="m-fps">—</b></span>
       </div>
     </header>
 
@@ -39,75 +30,39 @@
     </aside>
 
     <main class="board-wrap">
-      <svg id="board" xmlns="http://www.w3.org/2000/svg"></svg>
+      <div id="board-stack" class="board-stack">
+        <svg id="board" xmlns="http://www.w3.org/2000/svg"></svg>
+        <canvas id="particles-canvas" class="particles-canvas"></canvas>
+      </div>
     </main>
 
     <aside class="sidebar sidebar-right">
-      <div class="sidebar-title">TASK</div>
+      <div class="sidebar-title">TILE</div>
+      <div id="tile-inspector" class="tile-inspector"></div>
+      <div class="sidebar-title">GOALS</div>
       <div id="task" class="task-panel"></div>
       <div class="sidebar-title">STATS</div>
       <div id="stats" class="stats-panel"></div>
     </aside>
 
     <footer class="bottombar">
-      <button id="btn-reset" class="ctl-btn ctl-reset">reset [q]</button>
-      <button id="btn-step-back" class="ctl-btn">back [n]</button>
-      <button id="btn-step" class="ctl-btn">step [m]</button>
-      <button id="btn-play" class="ctl-btn ctl-play">▶ play [space]</button>
+      <button id="btn-reset" class="ctl-btn ctl-reset" type="button">reset sim [q]</button>
+      <button id="btn-play" class="ctl-btn ctl-play" type="button">▶ play [space]</button>
       <span class="speed-picker">
         <span class="speed-label">speed [-/+]</span>
-        <button class="spd-btn active" data-speed="1">×1</button>
-        <button class="spd-btn" data-speed="2">×2</button>
-        <button class="spd-btn" data-speed="3">×3</button>
-        <button class="spd-btn" data-speed="5">×5</button>
-        <button class="spd-btn" data-speed="8">×8</button>
-        <button class="spd-btn" data-speed="13">×13</button>
-        <button class="spd-btn" data-speed="21">×21</button>
-        <button class="spd-btn" data-speed="34">×34</button>
-        <button class="spd-btn" data-speed="55">×55</button>
+        <button type="button" class="spd-btn active" data-speed="1">×1</button>
+        <button type="button" class="spd-btn" data-speed="2">×2</button>
+        <button type="button" class="spd-btn" data-speed="3">×3</button>
+        <button type="button" class="spd-btn" data-speed="5">×5</button>
+        <button type="button" class="spd-btn" data-speed="8">×8</button>
+        <button type="button" class="spd-btn" data-speed="13">×13</button>
+        <button type="button" class="spd-btn" data-speed="21">×21</button>
+        <button type="button" class="spd-btn" data-speed="34">×34</button>
+        <button type="button" class="spd-btn" data-speed="55">×55</button>
       </span>
     </footer>
-
-    <div id="popover" class="popover hidden"></div>
-    <div id="config-dialog" class="config-dialog hidden"></div>
-
-    <div id="menu-dropdown" class="menu-dropdown hidden"></div>
   </div>
 
-  <div id="modal-win" class="modal hidden">
-    <div class="modal-card">
-      <div class="modal-title">S O L V E D</div>
-      <div class="modal-metrics">
-        <div><label>cycles</label><b id="win-cycles">0</b></div>
-        <div><label>components</label><b id="win-cmps">0</b></div>
-        <div><label>footprint</label><b id="win-ftp">0</b></div>
-      </div>
-      <div id="win-best" class="modal-best"></div>
-      <div class="modal-actions">
-        <button id="btn-retry" class="ctl-btn">retry</button>
-        <button id="btn-next" class="ctl-btn">next</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="modal-howto" class="modal hidden">
-    <div class="modal-card howto-card">
-      <div class="modal-title">H O W  T O  P L A Y</div>
-      <ol class="howto-list">
-        <li>Click a palette tile, then click an empty cell to place it.</li>
-        <li>Drag across cells to paint a run of belts.</li>
-        <li>Right-click a placed tile to rotate it. Click it for more options.</li>
-        <li>Drag a placed tile onto the palette area to delete it.</li>
-        <li>Hotkeys: <b>1…0</b> and <b>Shift+1…0</b> select/place palette tiles. <b>Tab</b>/<b>Shift+Tab</b> cycles palette.</li>
-        <li>Sim hotkeys (shown in buttons): <b>Space</b> play/pause, <b>Q</b> reset sim, <b>M</b> step forward, <b>N</b> step backward, <b>R</b> rotate hovered tile, <b>D</b> delete hovered tile, <b>Backspace/Delete</b> clear board, <b>Z</b> undo, <b>X</b> redo, <b>+</b>/<b>-</b> speed.</li>
-        <li>Press <b>play</b> to run the simulator. Match the target output to win.</li>
-      </ol>
-      <div class="modal-actions">
-        <button id="btn-howto-ok" class="ctl-btn">got it</button>
-      </div>
-    </div>
-  </div>
-
-  <script src="src/app.js"></script>
+  <script src="src/particles-app.js"></script>
 </body>
 </html>

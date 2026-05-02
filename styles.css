@@ -1,4 +1,4 @@
-/* BUILDER — pure black/white/grey vector aesthetic */
+/* STREAMS — particle sandbox (B/W + tool palette colors) */
 
 :root {
   --bg: #ffffff;
@@ -8,6 +8,12 @@
   --grey-3: #888888;   /* secondary text */
   --grey-4: #555555;   /* tertiary text */
   --cell: 56px;
+  /* Streams palette (optional in CSS; sim uses JS COLOR_HEX) */
+  --c-black: #111111;
+  --c-red: #cc2222;
+  --c-yellow: #ccaa00;
+  --c-blue: #2266cc;
+  --c-green: #228844;
 }
 
 * { box-sizing: border-box; }
@@ -46,57 +52,11 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   overflow: hidden;
 }
 
-/* ---------- Title / Level Select ---------- */
-
-#screen-title {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 60px 40px 40px;
-}
-
-.title-wordmark {
-  font-size: 28px;
-  letter-spacing: 0.4em;
-  margin-bottom: 60px;
-}
-
-#level-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 200px);
-  gap: 24px;
-  margin-bottom: 40px;
-}
-
-.level-card {
-  border: 1px solid var(--fg);
-  padding: 18px 16px 14px;
-  cursor: pointer;
-  text-align: center;
-  background: var(--bg);
-  min-height: 140px;
-  display: flex;
-  flex-direction: column;
-  justify-content: space-between;
-}
-.level-card:hover { background: var(--fg); color: var(--bg); }
-.level-card.locked { color: var(--grey-2); border-color: var(--grey-2); cursor: not-allowed; }
-.level-card.locked:hover { background: var(--bg); color: var(--grey-2); }
-.level-card .lc-num { font-size: 11px; letter-spacing: 0.2em; }
-.level-card .lc-name { font-size: 16px; letter-spacing: 0.2em; margin: 8px 0; }
-.level-card .lc-status { font-size: 11px; }
-.level-card .lc-best { font-size: 11px; color: var(--grey-3); margin-top: 8px; }
-.level-card:hover .lc-best { color: var(--grey-1); }
-
-.title-foot { margin-top: auto; }
-.text-btn { border: none; padding: 6px; color: var(--grey-3); }
-.text-btn:hover { background: transparent; color: var(--fg); }
-
-/* ---------- Game Screen Layout ---------- */
+/* ---------- Game layout ---------- */
 
 #screen-game {
   display: grid;
-  grid-template-columns: 220px 1fr 220px;
+  grid-template-columns: 220px 1fr minmax(248px, 300px);
   grid-template-rows: 44px 1fr 56px;
   grid-template-areas:
     "top top top"
@@ -267,10 +227,9 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 
 /* ---------- Board / SVG ---------- */
 
-.cell-dot { fill: var(--grey-1); }
 .tile-frame { fill: var(--bg); stroke: var(--fg); stroke-width: 1.5; }
 .tile-frame.fixed { stroke-dasharray: 3 2; }
-.tile-frame.popover-target { stroke-width: 2.5; }
+.tile-frame.inspector-target { stroke-width: 2.5; }
 .tile-arrow { fill: var(--fg); stroke: none; }
 .tile-label {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -298,156 +257,118 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   pointer-events: none;
 }
 
-.item-circle { fill: var(--bg); stroke: var(--fg); stroke-width: 1.5; }
-.item-glyph {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 22px;
-  fill: var(--fg);
-  text-anchor: middle;
-  dominant-baseline: central;
-  pointer-events: none;
-}
-.item-group {
-  /* Actual per-tick easing is controlled inline in JS (spawn/move/despawn split). */
-  will-change: transform;
-}
-
-.held-badge {
-  fill: var(--fg);
-  stroke: var(--fg);
-  stroke-width: 1;
-}
-
-.held-glyph {
-  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  font-size: 16px;
-  fill: var(--bg);
-  text-anchor: middle;
-  dominant-baseline: central;
-  pointer-events: none;
-}
-
-/* ---------- Popover & Config dialog ---------- */
-
-.popover {
-  position: absolute;
-  background: var(--bg);
-  border: 1px solid var(--fg);
-  padding: 4px;
-  display: flex;
-  gap: 4px;
-  z-index: 10;
-}
-.popover button {
-  padding: 4px 8px;
-  font-size: 11px;
-  min-width: 0;
-  border: 1px solid var(--fg);
-}
-
-.config-dialog {
-  position: absolute;
-  background: var(--bg);
-  border: 1px solid var(--fg);
-  padding: 10px;
-  z-index: 11;
-  width: 230px;
-}
-.config-dialog .cd-title {
-  font-size: 11px;
-  letter-spacing: 0.15em;
-  color: var(--grey-3);
-  margin-bottom: 8px;
-}
-.config-dialog .cd-grid {
-  display: grid;
-  grid-template-columns: repeat(8, 1fr);
-  gap: 3px;
-}
-.config-dialog .cd-key {
-  border: 1px solid var(--fg);
-  padding: 4px 0;
-  text-align: center;
-  cursor: pointer;
-  font-size: 12px;
-}
-.config-dialog .cd-key:hover { background: var(--fg); color: var(--bg); }
-.config-dialog .cd-key.active { background: var(--fg); color: var(--bg); }
-.config-dialog .cd-key.space { font-size: 9px; }
-
-/* ---------- Modals ---------- */
-
-.modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(255, 255, 255, 0.85);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 100;
-}
-.modal-card {
-  background: var(--bg);
-  border: 1.5px solid var(--fg);
-  padding: 32px 40px;
-  min-width: 320px;
-  text-align: center;
-}
-.modal-title {
-  font-size: 18px;
-  letter-spacing: 0.4em;
-  margin-bottom: 24px;
-}
-.modal-metrics {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  align-items: center;
-  margin-bottom: 16px;
-  font-size: 13px;
-}
-.modal-metrics div { display: flex; gap: 12px; align-items: baseline; }
-.modal-metrics label { color: var(--grey-3); width: 110px; text-align: right; }
-.modal-metrics b { font-weight: normal; min-width: 40px; text-align: left; }
-.modal-metrics .new-best::after {
-  content: ' *';
-  color: var(--fg);
-}
-.modal-best { font-size: 11px; color: var(--grey-3); margin-bottom: 24px; }
-.modal-actions { display: flex; gap: 12px; justify-content: center; }
-
-.howto-card { max-width: 480px; text-align: left; }
-.howto-list { padding-left: 22px; line-height: 1.7; }
-.howto-list li { margin-bottom: 6px; }
-.howto-card .modal-actions { justify-content: center; margin-top: 18px; }
-
-/* ---------- Menu dropdown ---------- */
-
-.menu-dropdown {
-  position: absolute;
-  top: 44px;
-  left: 12px;
-  background: var(--bg);
-  border: 1px solid var(--fg);
-  display: flex;
-  flex-direction: column;
-  z-index: 50;
-  min-width: 160px;
-}
-.menu-dropdown button {
-  border: none;
-  border-bottom: 1px solid var(--fg);
-  text-align: left;
-  padding: 8px 14px;
-}
-.menu-dropdown button:last-child { border-bottom: none; }
-.menu-dropdown button.menu-level-current {
-  background: var(--fg);
-  color: var(--bg);
-}
-
 /* ---------- Misc ---------- */
 
 ::selection { background: var(--fg); color: var(--bg); }
 
-.task-panel .tp-out-target { font-size: 13px; }
+/* ---------- Canvas stack ---------- */
+
+.board-stack {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.board-stack #board {
+  display: block;
+}
+
+.particles-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+
+.tile-interact-glow {
+  mix-blend-mode: plus-lighter;
+}
+
+.tile-inspector {
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: min(42vh, 360px);
+  overflow-y: auto;
+  padding-right: 2px;
+  margin-bottom: 4px;
+}
+
+.tile-inspector .inspector-empty {
+  color: var(--grey-3);
+  letter-spacing: 0.08em;
+  padding: 8px 0 12px;
+}
+
+.tile-inspector .inspector-header {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--grey-1);
+}
+
+.tile-inspector .inspector-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+.tile-inspector .inspector-actions button {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+.tile-inspector .insp-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 8px;
+}
+.tile-inspector .insp-row label {
+  font-size: 10px;
+  color: var(--grey-3);
+  letter-spacing: 0.08em;
+}
+.tile-inspector input[type="range"] {
+  width: 100%;
+}
+.tile-inspector .insp-val {
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.tile-inspector .color-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+.tile-inspector .swatch {
+  width: 22px;
+  height: 22px;
+  border: 1px solid var(--fg);
+  cursor: pointer;
+  padding: 0;
+}
+.tile-inspector .swatch.active {
+  outline: 2px solid var(--fg);
+  outline-offset: 1px;
+}
+
+.tile-inspector .insp-select-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.tile-inspector .insp-select-row label {
+  font-size: 10px;
+  color: var(--grey-3);
+}
+.tile-inspector .insp-select-row select {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 4px;
+  border: 1px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+}
