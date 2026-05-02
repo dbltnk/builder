@@ -1,5 +1,5 @@
 /**
- * STREAMS — particle sandbox (vanilla JS).
+ * MCE — Moebius Construction Environment (vanilla JS).
  * SVG equipment (free-placed tiles) + Canvas alphanumeric glyphs; fixed-timestep rAF physics.
  */
 'use strict';
@@ -11,10 +11,12 @@ const DIR_UP = 3;
 const DIR_DX = [1, 0, -1, 0];
 const DIR_DY = [0, 1, 0, -1];
 
-const SPEED_STEPS = [1, 2, 3, 5, 8, 13, 21, 34, 55];
-const SPEED_MULT = {
-  1: 1, 2: 1.4, 3: 2, 5: 2.8, 8: 4, 13: 5.5, 21: 8, 34: 11, 55: 16,
-};
+const SPEED_STEPS = [0.1, 1, 10, 100];
+
+/** Wall-clock scale for the fixed timestep (larger = faster sim). */
+function simTimeScale(speed) {
+  return SPEED_STEPS.includes(speed) ? speed : 1;
+}
 
 const COLOR_IDS = ['black', 'red', 'yellow', 'blue', 'green'];
 const COLOR_HEX = {
@@ -89,7 +91,7 @@ function hexToRgba(hex, alpha) {
 }
 
 const SANDBOX = {
-  name: 'sandbox',
+  name: 'mce',
   gridW: 26,
   gridH: 18,
   cellPx: 36,
@@ -290,7 +292,43 @@ const KIND_META = {
   BUFFER: { label: 'BUF', hasRotation: true },
 };
 
+/** Nominal material cost per tile kind (Zachtronics-style “optimize cost”). */
+const TILE_MATERIAL_COST = {
+  SOURCE: 42,
+  FOCUS: 14,
+  DIFFUSER: 16,
+  REFLECTOR: 12,
+  ABSORBER: 11,
+  GOAL: 24,
+  SPLITTER: 22,
+  RECOLOR: 13,
+  SPEED_GATE: 15,
+  SWIRL: 18,
+  TELEPORT: 26,
+  MEMBRANE: 14,
+  BEAM_SHAPER: 17,
+  RESONATOR: 20,
+  COLLIMATOR: 19,
+  BUFFER: 28,
+};
+
 /* ---------- State ---------- */
+
+function emptyRunStats() {
+  return {
+    spawnSource: 0,
+    bufferIn: 0,
+    bufferOut: 0,
+    splitBirths: 0,
+    teleports: 0,
+    absorber: 0,
+    goalCatch: 0,
+    reflectorHit: 0,
+    beamBounce: 0,
+    beamSlitKill: 0,
+    edgeCull: 0,
+  };
+}
 
 function createState() {
   const level = SANDBOX;
@@ -300,6 +338,8 @@ function createState() {
     nextTileId: 1,
     particles: [],
     nextParticleId: 1,
+    /** Cumulative interaction counts since last reset particles (q). */
+    runStats: emptyRunStats(),
     sim: {
       running: false,
       time: 0,
@@ -309,6 +349,8 @@ function createState() {
       lastFrame: 0,
       fpsAvg: 0,
       fpsFrames: 0,
+      /** Physics substeps executed in the most recent `physicsAccumulate` call. */
+      substepsLastFrame: 0,
     },
     ui: {
       brush: null,
@@ -399,7 +441,7 @@ function applyBoardSnapshot(state, board, legacyGridPositions) {
       }
     }
     const pl = placeTile(state, ent.kind, wx, wy, ent.rotation, ent.params);
-    if (!pl) console.error('[streams] Skipped invalid tile from snapshot', ent);
+    if (!pl) console.error('[mce] Skipped invalid tile from snapshot', ent);
   }
 }
 
@@ -408,6 +450,7 @@ function resetSim(state) {
   state.nextParticleId = 1;
   state.sim.time = 0;
   state.sim.accumulator = 0;
+  state.runStats = emptyRunStats();
   for (const t of state.tiles.values()) {
     if (t.kind === 'BUFFER') t._buf = [];
     if (t.kind === 'GOAL') t._captured = 0;
@@ -431,6 +474,7 @@ function cullParticlesOutside(state, p) {
   const { w, h } = worldSize(state);
   if (p.x < 0 || p.x > w || p.y < 0 || p.y > h) {
     p._dead = true;
+    state.runStats.edgeCull++;
     return true;
   }
   return false;
@@ -528,6 +572,7 @@ function emitFromSources(state, dt) {
         energyMax: spawnE,
         glyph: randomParticleGlyph(),
       });
+      state.runStats.spawnSource++;
       bumpTileInteractGlow(t, cid, INTERACT_GLOW_EMIT);
       budget--;
     }
@@ -687,6 +732,7 @@ function applyCellForces(state, p, dt, tile, cp) {
       const base = (tile.params.absorbP || 0.3) * dt * 45;
       if (Math.random() < clamp(base * (0.82 + 0.36 * Math.random()), 0, 0.98)) {
         p._dead = true;
+        state.runStats.beamSlitKill++;
         return;
       }
     }
@@ -726,6 +772,7 @@ function processBuffers(state, dt) {
           energyMax: em,
           glyph: b.glyph || randomParticleGlyph(),
         });
+        state.runStats.bufferOut++;
         bumpTileInteractGlow(t, b.colorId, INTERACT_GLOW_EMIT);
       }
       continue;
@@ -754,6 +801,7 @@ function processBuffers(state, dt) {
           energyMax: em,
           glyph: b.glyph || randomParticleGlyph(),
         });
+        state.runStats.bufferOut++;
         bumpTileInteractGlow(t, b.colorId, INTERACT_GLOW_EMIT);
       }
     }
@@ -801,6 +849,7 @@ function subStep(state, dt, telePairs) {
             energy: p.energy, energyMax: p.energyMax ?? p.energy,
             glyph: p.glyph,
           });
+          state.runStats.bufferIn++;
           bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE);
           p.lastTileId = tid;
           continue;
@@ -834,6 +883,7 @@ function subStep(state, dt, telePairs) {
           energy: e0, energyMax: em,
           glyph: gSplit,
         });
+        state.runStats.splitBirths++;
       }
       if (e1 > floorE) {
         splits.push({
@@ -844,6 +894,7 @@ function subStep(state, dt, telePairs) {
           energy: e1, energyMax: em,
           glyph: gSplit,
         });
+        state.runStats.splitBirths++;
       }
       continue;
     }
@@ -851,6 +902,7 @@ function subStep(state, dt, telePairs) {
     if (t.kind === 'TELEPORT' && entered) {
       const partner = telePairs.get(t.id);
       if (partner && Math.random() > clamp(t.params.malfunctionP || 0, 0, 1)) {
+        state.runStats.teleports++;
         bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE);
         bumpTileInteractGlow(partner, p.colorId, INTERACT_GLOW_DISCRETE * 0.85);
         const pcx = partner.x;
@@ -875,6 +927,7 @@ function subStep(state, dt, telePairs) {
       const j = clamp(t.params.absorbJitter ?? 0.18, 0, 0.45);
       const pTry = clamp(base * (0.84 + (Math.random() + Math.random() - 1) * j), 0, 0.98);
       if (Math.random() < pTry) {
+        state.runStats.absorber++;
         bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE);
         continue;
       }
@@ -887,6 +940,7 @@ function subStep(state, dt, telePairs) {
       const capP = clamp(t.params.captureP ?? 0.93, 0.02, 0.999);
       if (ok && (cap <= 0 || (t._captured | 0) < cap) && Math.random() < capP) {
         t._captured = (t._captured | 0) + 1;
+        state.runStats.goalCatch++;
         bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE);
         continue;
       }
@@ -899,6 +953,7 @@ function subStep(state, dt, telePairs) {
     }
 
     if (t.kind === 'REFLECTOR' && entered) {
+      state.runStats.reflectorHit++;
       bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE);
       const [rx, ry] = reflectMirror(p.vx, p.vy, t.rotation);
       p.vx = rx;
@@ -923,6 +978,7 @@ function subStep(state, dt, telePairs) {
           const vn = dot(p.vx, p.vy, n2x, n2y);
           p.vx -= 2 * vn * n2x;
           p.vy -= 2 * vn * n2y;
+          state.runStats.beamBounce++;
           bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE * 0.75);
         }
       }
@@ -953,7 +1009,7 @@ function subStep(state, dt, telePairs) {
 }
 
 function physicsAccumulate(state, realDt) {
-  const mult = SPEED_MULT[state.sim.speed] || 1;
+  const mult = simTimeScale(state.sim.speed);
   state.sim.accumulator += realDt * mult;
   const telePairs = buildTeleportPartners(state);
   let steps = 0;
@@ -963,6 +1019,7 @@ function physicsAccumulate(state, realDt) {
     subStep(state, FIXED_DT, telePairs);
     steps++;
   }
+  state.sim.substepsLastFrame = steps;
 }
 
 /* ---------- Render SVG ---------- */
@@ -1225,7 +1282,7 @@ function renderParticlesCanvas(state) {
 /* ---------- Storage ---------- */
 
 const Storage = {
-  KEY: 'streams.v1',
+  KEY: 'mce.v1',
   load() {
     try { return JSON.parse(localStorage.getItem(this.KEY)) || {}; }
     catch (e) { return {}; }
@@ -1543,6 +1600,14 @@ function renderTileInspector() {
 
 /* ---------- Palette & HUD ---------- */
 
+/** Hotkey label for palette index 0–19 (digits 1–9,0 then Shift+digits). */
+function paletteHotkeyLabel(index) {
+  if (index < 0 || index >= 20) return '';
+  const n = index % 10;
+  const ch = n === 9 ? '0' : String(n + 1);
+  return index < 10 ? ch : `⇧${ch}`;
+}
+
 function renderPalette() {
   const host = document.getElementById('palette');
   host.innerHTML = '';
@@ -1552,6 +1617,14 @@ function renderPalette() {
     const entry = document.createElement('div');
     entry.className = 'palette-entry';
     if (ui.brush && ui.brush.kind === kind) entry.classList.add('active');
+    const hk = paletteHotkeyLabel(i);
+    if (hk) {
+      const badge = document.createElement('span');
+      badge.className = 'pe-hotkey';
+      badge.textContent = hk;
+      badge.title = i < 10 ? `Hotkey ${hk}` : `Hotkey Shift+${hk.slice(1)}`;
+      entry.appendChild(badge);
+    }
     const glyph = document.createElementNS(SVG_NS, 'svg');
     glyph.setAttribute('class', 'pe-glyph');
     glyph.setAttribute('viewBox', '0 0 56 56');
@@ -1605,6 +1678,158 @@ function renderPalette() {
   }
 }
 
+/** Fixed-timestep ticks since last reset (Zachtronics “cycles”). */
+function solutionCycleTicks(state) {
+  return Math.round(state.sim.time / FIXED_DT);
+}
+
+/** Axis-aligned bbox of all tile hitboxes, in board-cell² (spread-out layouts score worse). */
+function solutionFootprintCellsSq(state) {
+  const cp = cellPx(state);
+  const tiles = [...state.tiles.values()];
+  if (tiles.length === 0) return 0;
+  const half = cp * 0.5;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  for (const t of tiles) {
+    minX = Math.min(minX, t.x - half);
+    maxX = Math.max(maxX, t.x + half);
+    minY = Math.min(minY, t.y - half);
+    maxY = Math.max(maxY, t.y + half);
+  }
+  const areaPx = (maxX - minX) * (maxY - minY);
+  return areaPx / (cp * cp);
+}
+
+function solutionMaterialCost(state) {
+  let s = 0;
+  for (const t of state.tiles.values()) {
+    s += TILE_MATERIAL_COST[t.kind] ?? 12;
+  }
+  return s;
+}
+
+function equipmentSummary(state) {
+  const c = new Map();
+  for (const t of state.tiles.values()) {
+    c.set(t.kind, (c.get(t.kind) || 0) + 1);
+  }
+  const order = ['SOURCE', 'GOAL', 'BUFFER', 'TELEPORT', 'SPLITTER', 'ABSORBER', 'REFLECTOR'];
+  const parts = [];
+  for (const k of order) {
+    const n = c.get(k) || 0;
+    if (n) parts.push(`${KIND_META[k]?.label ?? k}×${n}`);
+  }
+  return parts.length ? parts.join(' · ') : '—';
+}
+
+function goalsCapturedSum(state) {
+  let s = 0;
+  for (const t of state.tiles.values()) {
+    if (t.kind === 'GOAL') s += t._captured | 0;
+  }
+  return s;
+}
+
+function sourceBudgetPct(state) {
+  let left = 0, cap = 0;
+  for (const t of state.tiles.values()) {
+    if (t.kind !== 'SOURCE') continue;
+    const b = t.params.energyBudget | 0;
+    if (b <= 0) continue;
+    cap += b;
+    left += t._energyLeft != null ? t._energyLeft : b;
+  }
+  if (cap <= 0) return null;
+  return (100 * left) / cap;
+}
+
+function bufferCapacityTotals(state) {
+  let used = 0, cap = 0;
+  for (const t of state.tiles.values()) {
+    if (t.kind !== 'BUFFER') continue;
+    const maxK = Math.max(1, t.params.maxK | 0);
+    cap += maxK;
+    used += (t._buf || []).length;
+  }
+  return { used, cap };
+}
+
+function computeParticleMetrics(state) {
+  const ps = state.particles;
+  const n = ps.length;
+  if (n === 0) {
+    return {
+      meanSpeed: 0,
+      meanEnergyFrac: 0,
+      sumKe: 0,
+      minSpeed: 0,
+      maxSpeed: 0,
+      minEf: 0,
+      maxEf: 0,
+      spread: 0,
+      uniqueGlyphs: 0,
+      colorsPresent: 0,
+      maxPerTile: 0,
+      tilesWithParticles: 0,
+    };
+  }
+  let sx = 0;
+  let sy = 0;
+  let sumSp = 0;
+  let sumKe = 0;
+  let sumEf = 0;
+  let minSp = Infinity;
+  let maxSp = 0;
+  let minEf = 1;
+  let maxEf = 0;
+  const colors = new Set();
+  const glyphs = new Set();
+  const tilePop = new Map();
+  for (const p of ps) {
+    sx += p.x;
+    sy += p.y;
+    const sp = hypot(p.vx, p.vy);
+    sumSp += sp;
+    sumKe += sp * sp;
+    minSp = Math.min(minSp, sp);
+    maxSp = Math.max(maxSp, sp);
+    colors.add(p.colorId && COLOR_HEX[p.colorId] ? p.colorId : 'black');
+    if (p.glyph) glyphs.add(p.glyph);
+    const maxE = Math.max(1e-6, p.energyMax ?? p.energy ?? 1);
+    const e = Number.isFinite(p.energy) ? p.energy : maxE;
+    const ef = e / maxE;
+    sumEf += ef;
+    minEf = Math.min(minEf, ef);
+    maxEf = Math.max(maxEf, ef);
+    const tile = tileAtPoint(state, p.x, p.y);
+    const key = tile ? tile.id : -1;
+    tilePop.set(key, (tilePop.get(key) || 0) + 1);
+  }
+  sx /= n;
+  sy /= n;
+  let distSum = 0;
+  for (const p of ps) distSum += Math.hypot(p.x - sx, p.y - sy);
+  let maxPerTile = 0;
+  for (const v of tilePop.values()) maxPerTile = Math.max(maxPerTile, v);
+  return {
+    meanSpeed: sumSp / n,
+    meanEnergyFrac: sumEf / n,
+    sumKe,
+    minSpeed: minSp,
+    maxSpeed: maxSp,
+    minEf,
+    maxEf,
+    spread: distSum / n,
+    uniqueGlyphs: glyphs.size,
+    colorsPresent: colors.size,
+    maxPerTile,
+    tilesWithParticles: tilePop.size,
+  };
+}
+
 function renderGoals() {
   const host = document.getElementById('task');
   host.innerHTML = '';
@@ -1624,18 +1849,79 @@ function renderGoals() {
 }
 
 function renderHUD() {
-  document.getElementById('m-time').textContent = APP.state.sim.time.toFixed(1);
-  document.getElementById('m-dots').textContent = String(APP.state.particles.length);
-  document.getElementById('m-fps').textContent = APP.state.sim.fpsAvg > 0 ? APP.state.sim.fpsAvg.toFixed(0) : '—';
   const host = document.getElementById('stats');
+  const st = APP.state;
+  const rs = st.runStats;
+  const sim = st.sim;
+  const n = st.particles.length;
+  const fpsStr = sim.fpsAvg > 0 ? sim.fpsAvg.toFixed(0) : '—';
+  const zhFoot = Math.ceil(solutionFootprintCellsSq(st));
+  const zhCost = solutionMaterialCost(st);
+  const zhCycles = solutionCycleTicks(st);
+
   let buf = 0;
-  for (const t of APP.state.tiles.values()) {
+  for (const t of st.tiles.values()) {
     if (t.kind === 'BUFFER' && t._buf) buf += t._buf.length;
   }
-  host.innerHTML = `
-    <div class="sp-row"><span>buffered</span><b>${buf}</b></div>
-    <div class="sp-row"><span>tiles</span><b>${APP.state.tiles.size}</b></div>
-  `;
+  const bufCap = bufferCapacityTotals(st);
+  const bufFill = bufCap.cap > 0 ? ((100 * bufCap.used) / bufCap.cap).toFixed(0) + '%' : '—';
+  const srcPct = sourceBudgetPct(st);
+  const srcBudgetStr = srcPct == null ? '∞' : `${srcPct.toFixed(0)}%`;
+  const pm = computeParticleMetrics(st);
+  const capPct = ((100 * n) / MAX_PARTICLES).toFixed(1);
+  const spd = simTimeScale(sim.speed);
+  const headRows = [
+    ['time (sim s)', sim.time.toFixed(1)],
+    ['chars', String(n)],
+    ['fps', fpsStr],
+  ];
+  const zhRows = [
+    ['cycles', String(zhCycles)],
+    ['footprint (cells²)', String(zhFoot)],
+    ['cost', String(zhCost)],
+  ];
+  const rows = [
+    ['time scale', `×${spd}`],
+    ['substeps / frame', String(sim.substepsLastFrame | 0)],
+    ['sim capacity', `${capPct}%`],
+    ['tiles placed', String(st.tiles.size)],
+    ['equipment', equipmentSummary(st)],
+    ['buffered (live)', String(buf)],
+    ['buffer slots', bufCap.cap > 0 ? `${bufCap.used}/${bufCap.cap}` : '—'],
+    ['buffer fill', bufFill],
+    ['SRC budget', srcBudgetStr],
+    ['goals Σ captured', String(goalsCapturedSum(st))],
+    ['⟨speed⟩', n ? pm.meanSpeed.toFixed(1) : '—'],
+    ['speed min–max', n ? `${pm.minSpeed.toFixed(0)}–${pm.maxSpeed.toFixed(0)}` : '—'],
+    ['⟨energy⟩', n ? (pm.meanEnergyFrac * 100).toFixed(0) + '%' : '—'],
+    ['energy min–max', n ? `${(pm.minEf * 100).toFixed(0)}–${(pm.maxEf * 100).toFixed(0)}%` : '—'],
+    ['Σ v² (ke proxy)', n ? pm.sumKe.toFixed(0) : '0'],
+    ['spread (px)', n ? pm.spread.toFixed(0) : '—'],
+    ['glyph kinds', n ? `${pm.uniqueGlyphs} / ${n}` : '—'],
+    ['color channels', n ? String(pm.colorsPresent) + ' / 5' : '—'],
+    ['pile height', n ? String(pm.maxPerTile) : '—'],
+    ['tiles occupied', n ? String(pm.tilesWithParticles) : '—'],
+  ];
+  const runRows = [
+    ['spawned (SRC)', String(rs.spawnSource)],
+    ['buffer in → out', `${rs.bufferIn} → ${rs.bufferOut}`],
+    ['split births', String(rs.splitBirths)],
+    ['teleports', String(rs.teleports)],
+    ['absorber', String(rs.absorber)],
+    ['goal catches', String(rs.goalCatch)],
+    ['reflector (enter)', String(rs.reflectorHit)],
+    ['beam bounce', String(rs.beamBounce)],
+    ['beam slit kill', String(rs.beamSlitKill)],
+    ['edge cull', String(rs.edgeCull)],
+  ];
+  const rowHtml = (a, rowClass = '') => a.map(([k, v]) =>
+    `<div class="sp-row${rowClass ? ` ${rowClass}` : ''}"><span>${k}</span><b>${v}</b></div>`).join('');
+  host.innerHTML = rowHtml(headRows)
+    + '<div class="sp-zh">layout score</div>'
+    + rowHtml(zhRows, 'sp-zh-metric')
+    + rowHtml(rows)
+    + '<div class="sp-sub">run since reset (q)</div>'
+    + rowHtml(runRows);
 }
 
 /* ---------- Input ---------- */
@@ -1726,6 +2012,7 @@ function attachBoardInput(boardEl) {
       const b = APP.state.ui.brush;
       if (canPlaceTileCenter(APP.state, world.x, world.y, null, b.kind)) {
         withBoardEdit(APP.state, () => !!placeTile(APP.state, b.kind, world.x, world.y, b.rotation, b.params));
+        APP.state.ui.brush = null;
       }
       APP.render();
     }
@@ -1746,10 +2033,12 @@ function attachBoardInput(boardEl) {
 }
 
 function hotkeyPaletteIndexFromEvent(e) {
-  if (!e.code || !e.code.startsWith('Digit')) return -1;
-  const digit = e.code.slice(5);
+  let digit = '';
+  if (e.code && e.code.startsWith('Digit')) digit = e.code.slice(5);
+  else if (e.code && e.code.startsWith('Numpad')) digit = e.code.slice(6);
   if (!/^\d$/.test(digit)) return -1;
   const base = digit === '0' ? 9 : parseInt(digit, 10) - 1;
+  if (e.shiftKey && e.code && e.code.startsWith('Numpad')) return -1;
   return base + (e.shiftKey ? 10 : 0);
 }
 
@@ -1809,7 +2098,8 @@ function attachUI() {
 
   for (const b of document.querySelectorAll('.spd-btn')) {
     b.addEventListener('click', () => {
-      const s = parseInt(b.dataset.speed, 10);
+      const s = Number(b.dataset.speed);
+      if (!SPEED_STEPS.includes(s)) return;
       APP.state.sim.speed = s;
       for (const x of document.querySelectorAll('.spd-btn')) x.classList.remove('active');
       b.classList.add('active');
@@ -1819,12 +2109,17 @@ function attachUI() {
 
   document.addEventListener('mousedown', e => {
     if (APP) {
+      const tgt = e.target instanceof Element ? e.target : e.target?.parentElement;
+      const sg = document.getElementById('screen-game');
+      if (sg && tgt && sg.contains(tgt)) {
+        sg.focus({ preventScroll: true });
+      }
       // Include .sidebar (left + right): capture-phase runs before click; re-rendering
       // the palette here would replace DOM under the pointer and swallow palette clicks.
-      const keepInspector = e.target.closest('.sidebar')
-        || e.target.closest('[data-tile-id]')
-        || e.target.closest('.topbar')
-        || e.target.closest('.bottombar');
+      const keepInspector = tgt && (tgt.closest('.sidebar')
+        || tgt.closest('[data-tile-id]')
+        || tgt.closest('.topbar')
+        || tgt.closest('.bottombar'));
       if (!keepInspector) {
         clearInspector();
         APP.render();
@@ -1832,7 +2127,7 @@ function attachUI() {
     }
   }, true);
 
-  document.addEventListener('keydown', e => {
+  const onAppKeydown = e => {
     if (!APP) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const t = e.target;
@@ -1846,17 +2141,17 @@ function attachUI() {
     }
     const pi = hotkeyPaletteIndexFromEvent(e);
     if (pi >= 0) {
+      if (e.repeat) return;
       const kind = APP.state.level.palette[pi];
-      if (kind) {
-        e.preventDefault();
+      if (!kind) return;
+      e.preventDefault();
+      const cur = APP.state.ui.brush;
+      if (cur && cur.kind === kind) {
+        APP.state.ui.brush = null;
+      } else {
         APP.state.ui.brush = { kind, rotation: 0, params: defaultParams(kind) };
-        const hw = APP.state.ui.hoverWorld;
-        if (hw && canPlaceTileCenter(APP.state, hw.x, hw.y, null, APP.state.ui.brush.kind)) {
-          const b = APP.state.ui.brush;
-          withBoardEdit(APP.state, () => !!placeTile(APP.state, b.kind, hw.x, hw.y, b.rotation, b.params));
-        }
-        APP.render();
       }
+      APP.render();
       return;
     }
     if (e.key === ' ' || e.code === 'Space') {
@@ -1904,15 +2199,16 @@ function attachUI() {
       e.preventDefault();
       document.getElementById('btn-delete').click();
     }
-  });
+  };
+  window.addEventListener('keydown', onAppKeydown, true);
 }
 
 function bumpSpeed(dir) {
   const i = SPEED_STEPS.indexOf(APP.state.sim.speed);
-  const ni = clamp((i < 0 ? 0 : i) + dir, 0, SPEED_STEPS.length - 1);
+  const ni = clamp((i < 0 ? 1 : i) + dir, 0, SPEED_STEPS.length - 1);
   APP.state.sim.speed = SPEED_STEPS[ni];
   for (const b of document.querySelectorAll('.spd-btn')) {
-    b.classList.toggle('active', parseInt(b.dataset.speed, 10) === APP.state.sim.speed);
+    b.classList.toggle('active', Number(b.dataset.speed) === APP.state.sim.speed);
   }
   Storage.saveSpeed(APP.state.sim.speed);
 }
@@ -1975,11 +2271,12 @@ function bootstrap() {
   const saved = Storage.getBoard();
   const meta = Storage.load();
   if (saved) applyBoardSnapshot(state, saved, !meta.posPx);
-  const sp = Storage.getSpeed();
-  if (SPEED_STEPS.includes(sp)) state.sim.speed = sp;
+  let sp = Storage.getSpeed();
+  if (!SPEED_STEPS.includes(sp)) sp = 1;
+  state.sim.speed = sp;
   APP = { state, render: renderAll };
   document.querySelectorAll('.spd-btn').forEach(b => {
-    b.classList.toggle('active', parseInt(b.dataset.speed, 10) === state.sim.speed);
+    b.classList.toggle('active', Number(b.dataset.speed) === state.sim.speed);
   });
   attachUI();
   if (!BOARD_INPUT_ATTACHED) {
@@ -1987,6 +2284,13 @@ function bootstrap() {
     BOARD_INPUT_ATTACHED = true;
   }
   renderAll();
+  const focusGame = () => {
+    document.getElementById('screen-game')?.focus({ preventScroll: true });
+  };
+  requestAnimationFrame(() => {
+    focusGame();
+    requestAnimationFrame(focusGame);
+  });
 }
 
 window.addEventListener('DOMContentLoaded', () => {

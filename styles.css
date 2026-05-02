@@ -1,4 +1,4 @@
-/* STREAMS — particle sandbox (B/W + tool palette colors) */
+/* MCE — Moebius Construction Environment (B/W + tool palette colors) */
 
 :root {
   --bg: #ffffff;
@@ -8,7 +8,7 @@
   --grey-3: #888888;   /* secondary text */
   --grey-4: #555555;   /* tertiary text */
   --cell: 56px;
-  /* Streams palette (optional in CSS; sim uses JS COLOR_HEX) */
+  /* Particle palette (optional in CSS; sim uses JS COLOR_HEX) */
   --c-black: #111111;
   --c-red: #cc2222;
   --c-yellow: #ccaa00;
@@ -88,17 +88,10 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 .level-title {
   font-size: 14px;
   letter-spacing: 0.2em;
-  flex: 0 0 auto;
+  flex: 1 1 auto;
+  text-align: center;
+  min-width: 0;
 }
-
-.metrics-readout {
-  margin-left: auto;
-  display: flex;
-  gap: 18px;
-}
-.metric { display: inline-flex; align-items: baseline; gap: 6px; }
-.metric label { color: var(--grey-3); font-size: 11px; text-transform: lowercase; }
-.metric b { font-weight: normal; font-variant-numeric: tabular-nums; }
 
 .sidebar {
   border: 1px solid var(--fg);
@@ -142,7 +135,13 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 }
 
 .ctl-btn { min-width: 72px; }
-.ctl-reset { margin-right: auto; }
+
+.bottombar-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-right: auto;
+}
 
 .speed-picker {
   display: inline-flex;
@@ -157,6 +156,7 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 /* ---------- Palette ---------- */
 
 .palette-entry {
+  position: relative;
   border: 1px solid var(--fg);
   padding: 8px;
   margin-bottom: 8px;
@@ -165,9 +165,31 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   align-items: center;
   gap: 10px;
 }
+.palette-entry .pe-hotkey {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  z-index: 2;
+  min-width: 1.1em;
+  padding: 1px 4px;
+  font-size: 9px;
+  line-height: 1.25;
+  letter-spacing: 0;
+  text-align: center;
+  border: 1px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
 .palette-entry.active {
   background: var(--fg);
   color: var(--bg);
+}
+.palette-entry.active .pe-hotkey {
+  background: var(--fg);
+  color: var(--bg);
+  border-color: var(--bg);
 }
 .palette-entry .pe-glyph {
   width: 28px;
@@ -222,8 +244,36 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 .task-panel .so-far { color: var(--grey-4); }
 
 .stats-panel { font-size: 11px; line-height: 1.7; color: var(--grey-4); }
-.stats-panel .sp-row { display: flex; justify-content: space-between; }
-.stats-panel .sp-row b { color: var(--fg); font-weight: normal; font-variant-numeric: tabular-nums; }
+.stats-panel .sp-row { display: flex; justify-content: space-between; gap: 8px; }
+.stats-panel .sp-row b { color: var(--fg); font-weight: normal; font-variant-numeric: tabular-nums; text-align: right; }
+.stats-panel .sp-sub {
+  margin: 10px 0 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--grey-2);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--grey-3);
+  text-align: center;
+}
+
+.stats-panel .sp-zh {
+  margin: 0 0 4px;
+  padding-top: 8px;
+  border-top: 1px solid var(--grey-2);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--grey-3);
+  text-align: center;
+}
+
+.stats-panel .sp-row.sp-zh-metric span:first-child {
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-size: 10px;
+  color: var(--grey-3);
+}
 
 /* ---------- Board / SVG ---------- */
 

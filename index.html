@@ -3,24 +3,18 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>STREAMS</title>
+  <title>MCE - Moebius Construction Environment</title>
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
 
-  <div id="screen-game" class="screen">
+  <div id="screen-game" class="screen" tabindex="-1" autofocus>
     <header class="topbar">
       <button id="btn-rotate" class="icon-btn" type="button" title="rotate hovered">rot [r]</button>
       <button id="btn-delete" class="icon-btn" type="button" title="delete hovered">del [d]</button>
-      <button id="btn-clear" class="icon-btn" type="button" title="clear board">clear [bksp]</button>
       <button id="btn-undo" class="icon-btn" type="button" title="undo">undo [z]</button>
       <button id="btn-redo" class="icon-btn" type="button" title="redo">redo [x]</button>
-      <div id="level-title" class="level-title">sandbox</div>
-      <div class="metrics-readout">
-        <span class="metric"><label>time</label><b id="m-time">0</b></span>
-        <span class="metric"><label>chars</label><b id="m-dots">0</b></span>
-        <span class="metric"><label>fps</label><b id="m-fps">—</b></span>
-      </div>
+      <div id="level-title" class="level-title">MCE - Moebius Construction Environment</div>
     </header>
 
     <aside class="sidebar sidebar-left">
@@ -46,19 +40,17 @@
     </aside>
 
     <footer class="bottombar">
-      <button id="btn-reset" class="ctl-btn ctl-reset" type="button">reset sim [q]</button>
+      <div class="bottombar-left">
+        <button id="btn-clear" class="ctl-btn" type="button">clear [bksp]</button>
+        <button id="btn-reset" class="ctl-btn" type="button">reset particles [q]</button>
+      </div>
       <button id="btn-play" class="ctl-btn ctl-play" type="button">▶ play [space]</button>
       <span class="speed-picker">
         <span class="speed-label">speed [-/+]</span>
+        <button type="button" class="spd-btn" data-speed="0.1">×0.1</button>
         <button type="button" class="spd-btn active" data-speed="1">×1</button>
-        <button type="button" class="spd-btn" data-speed="2">×2</button>
-        <button type="button" class="spd-btn" data-speed="3">×3</button>
-        <button type="button" class="spd-btn" data-speed="5">×5</button>
-        <button type="button" class="spd-btn" data-speed="8">×8</button>
-        <button type="button" class="spd-btn" data-speed="13">×13</button>
-        <button type="button" class="spd-btn" data-speed="21">×21</button>
-        <button type="button" class="spd-btn" data-speed="34">×34</button>
-        <button type="button" class="spd-btn" data-speed="55">×55</button>
+        <button type="button" class="spd-btn" data-speed="10">×10</button>
+        <button type="button" class="spd-btn" data-speed="100">×100</button>
       </span>
     </footer>
   </div>
