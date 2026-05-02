@@ -1,6 +1,6 @@
 /**
  * STREAMS — particle sandbox (vanilla JS).
- * SVG equipment (free-placed tiles) + Canvas dots; fixed-timestep rAF physics.
+ * SVG equipment (free-placed tiles) + Canvas alphanumeric glyphs; fixed-timestep rAF physics.
  */
 'use strict';
 
@@ -38,6 +38,55 @@ const MAX_BUFFER_RELEASE_PER_SUBSTEP = 4;
 /** SOURCE `energyBudget` is in these units; each spawn costs speed² / this (≈ ke at m=2). */
 const SOURCE_EMIT_ENERGY_DIV = 200;
 const EPS = 1e-6;
+/** Remove particle when energy ≤ this fraction of its personal max (spawn value). */
+const PARTICLE_ENERGY_REMOVE_FRAC = 0.012;
+
+function drainParticleEnergy(p, amount) {
+  if (p._dead || !(amount > 0)) return;
+  const maxE = Math.max(1e-6, p.energyMax ?? p.energy ?? 1);
+  if (!Number.isFinite(p.energy)) p.energy = maxE;
+  p.energy -= amount;
+  if (p.energy <= maxE * PARTICLE_ENERGY_REMOVE_FRAC) p._dead = true;
+}
+
+function applyTileEnergyDrain(tile, p) {
+  if (!tile || tile.kind === 'SOURCE') return;
+  const d = Number(tile.params.energyDrain);
+  if (!(d > 0)) return;
+  drainParticleEnergy(p, d);
+}
+
+function ensureParticleEnergyFields(p) {
+  if (!Number.isFinite(p.energy) || !Number.isFinite(p.energyMax)) {
+    p.energy = 100;
+    p.energyMax = 100;
+  }
+}
+
+const PARTICLE_GLYPH_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+
+function randomParticleGlyph() {
+  const s = PARTICLE_GLYPH_ALPHABET;
+  return s[(Math.random() * s.length) | 0];
+}
+
+function ensureParticleGlyph(p) {
+  const g = p.glyph;
+  if (typeof g !== 'string' || g.length !== 1 || !/[A-Z0-9]/i.test(g)) {
+    p.glyph = randomParticleGlyph();
+  } else {
+    p.glyph = g.toUpperCase();
+  }
+}
+
+function hexToRgba(hex, alpha) {
+  const h = (hex || '#000').replace('#', '');
+  if (h.length !== 6) return `rgba(0,0,0,${alpha})`;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 
 const SANDBOX = {
   name: 'sandbox',
@@ -57,14 +106,62 @@ function halfTile(cp) {
   return cp * 0.5;
 }
 
-/** Tile occupies a cp×cp axis-aligned square centered at (tile.x, tile.y). */
-function pointInTileRect(px, py, tile, cp) {
-  const h = halfTile(cp);
-  return px >= tile.x - h && px <= tile.x + h && py >= tile.y - h && py <= tile.y + h;
+/**
+ * Oriented hitbox in tile-local axes: +lx along rotation (DIR), +ly along (-DIRy, DIRx) (screen-down orth).
+ * hw, hh = half-extents as fractions of cp (each in (0, 0.5]).
+ */
+const KIND_HITBOX = {
+  SOURCE: { hw: 0.14, hh: 0.14 },
+  FOCUS: { hw: 0.24, hh: 0.20 },
+  DIFFUSER: { hw: 0.27, hh: 0.27 },
+  REFLECTOR: { hw: 0.48, hh: 0.09 },
+  ABSORBER: { hw: 0.16, hh: 0.16 },
+  GOAL: { hw: 0.24, hh: 0.22 },
+  SPLITTER: { hw: 0.20, hh: 0.20 },
+  RECOLOR: { hw: 0.20, hh: 0.16 },
+  SPEED_GATE: { hw: 0.27, hh: 0.14 },
+  SWIRL: { hw: 0.27, hh: 0.27 },
+  TELEPORT: { hw: 0.16, hh: 0.16 },
+  MEMBRANE: { hw: 0.08, hh: 0.48 },
+  BEAM_SHAPER: { hw: 0.46, hh: 0.10 },
+  RESONATOR: { hw: 0.27, hh: 0.24 },
+  COLLIMATOR: { hw: 0.24, hh: 0.24 },
+  BUFFER: { hw: 0.22, hh: 0.18 },
+};
+
+function hitboxHalf(kind) {
+  const h = KIND_HITBOX[kind];
+  return h || { hw: 0.495, hh: 0.495 };
 }
 
-function tilesOverlapCenters(ax, ay, bx, by, cp) {
-  return Math.abs(ax - bx) < cp - EPS && Math.abs(ay - by) < cp - EPS;
+/** World (wx,wy) → local (lx,ly) in tile rotation frame; origin = tile center. */
+function localFromWorld(tile, wx, wy) {
+  const r = (tile.rotation | 0) & 3;
+  const rx = wx - tile.x;
+  const ry = wy - tile.y;
+  const e1x = DIR_DX[r];
+  const e1y = DIR_DY[r];
+  const e2x = -DIR_DY[r];
+  const e2y = DIR_DX[r];
+  const lx = rx * e1x + ry * e1y;
+  const ly = rx * e2x + ry * e2y;
+  return { lx, ly };
+}
+
+function pointInTileHitbox(px, py, tile, cp) {
+  const { hw, hh } = hitboxHalf(tile.kind);
+  const { lx, ly } = localFromWorld(tile, px, py);
+  return Math.abs(lx) <= hw * cp + EPS && Math.abs(ly) <= hh * cp + EPS;
+}
+
+/** Conservative radius for placement overlap (circle enclosing local hit rect). */
+function placementRadius(kind, cp) {
+  const { hw, hh } = hitboxHalf(kind);
+  return cp * hypot(hw, hh) + EPS * 8;
+}
+
+function tilesOverlapCenters(ax, ay, kindA, bx, by, kindB, cp) {
+  return hypot(ax - bx, ay - by) < placementRadius(kindA, cp) + placementRadius(kindB, cp) - EPS * 4;
 }
 
 /** Topmost tile at a point: highest id wins (matches SVG paint order). */
@@ -72,7 +169,7 @@ function tileAtPoint(state, wx, wy) {
   const cp = cellPx(state);
   let best = null;
   for (const t of state.tiles.values()) {
-    if (!pointInTileRect(wx, wy, t, cp)) continue;
+    if (!pointInTileHitbox(wx, wy, t, cp)) continue;
     if (!best || t.id > best.id) best = t;
   }
   return best;
@@ -84,19 +181,25 @@ function clampTileCenter(state, x, y) {
   return [clamp(x, half, w - half), clamp(y, half, h - half)];
 }
 
-function overlapsAnyTile(state, cx, cy, excludeId) {
+function overlapsAnyTile(state, cx, cy, excludeId, placeKind) {
   const cp = cellPx(state);
+  let kindSelf = placeKind;
+  if (excludeId != null) {
+    const self = state.tiles.get(excludeId);
+    if (self) kindSelf = self.kind;
+  }
+  if (!kindSelf) kindSelf = 'SOURCE';
   for (const t of state.tiles.values()) {
     if (excludeId != null && t.id === excludeId) continue;
-    if (tilesOverlapCenters(cx, cy, t.x, t.y, cp)) return true;
+    if (tilesOverlapCenters(cx, cy, kindSelf, t.x, t.y, t.kind, cp)) return true;
   }
   return false;
 }
 
-/** Returns { x, y } clamped world center, or null if overlapping another tile. */
-function canPlaceTileCenter(state, wx, wy, excludeId) {
+/** Returns { x, y } clamped world center, or null if overlapping another tile. placeKind = kind being placed when excludeId is null. */
+function canPlaceTileCenter(state, wx, wy, excludeId, placeKind) {
   const [x, y] = clampTileCenter(state, wx, wy);
-  if (overlapsAnyTile(state, x, y, excludeId)) return null;
+  if (overlapsAnyTile(state, x, y, excludeId, placeKind)) return null;
   return { x, y };
 }
 
@@ -136,30 +239,34 @@ function defaultParams(kind) {
       rate: 120,
       speedMin: 80,
       speedMax: 140,
-      sprayDeg: 28,
-      colorId: 'red',
+      sprayDeg: 4,
+      colorId: 'black',
       burst: 0.12,
       timingNoise: 0.22,
       /** 0 = unlimited emission; >0 = initial energy pool (depleted by speed² per spawn). */
       energyBudget: 0,
+      /** Initial kinetic budget for each spawned dot (size/brightness scale to this max). */
+      spawnParticleEnergy: 100,
+      energyDrain: 0,
     },
-    FOCUS: { strength: 4, hitP: 0.9 },
-    DIFFUSER: { spreadDeg: 22, spikeP: 0.09, spikeMul: 1.55 },
-    REFLECTOR: { scatterDeg: 4, scatterP: 0.72 },
-    ABSORBER: { absorbP: 0.35, absorbJitter: 0.18 },
-    GOAL: { filterColor: 'any', capacity: 0, captureP: 0.93 },
-    SPLITTER: { splitP: 1, childSpeed: 0.72, angleJitterDeg: 3 },
-    RECOLOR: { recolorRate: 6, skipP: 0.06 },
-    SPEED_GATE: { parallelGain: 1.35, tangentialGain: 1, engageP: 0.88 },
-    SWIRL: { omega: 220, decay: 2.2, omegaJitter: 0.14 },
-    TELEPORT: { linkId: 0, malfunctionP: 0, coneDeg: 12, exitJitterDeg: 4 },
-    MEMBRANE: { leakP: 0.08, wobbleP: 0.06 },
+    FOCUS: { strength: 4, hitP: 0.9, energyDrain: 0.38 },
+    DIFFUSER: { spreadDeg: 22, spikeP: 0.09, spikeMul: 1.55, energyDrain: 0.28 },
+    REFLECTOR: { scatterDeg: 4, scatterP: 0.72, energyDrain: 0.22 },
+    ABSORBER: { absorbP: 0.35, absorbJitter: 0.18, energyDrain: 1.1 },
+    GOAL: { filterColor: 'any', capacity: 0, captureP: 0.93, energyDrain: 0.16 },
+    SPLITTER: { splitP: 1, childSpeed: 0.72, angleJitterDeg: 3, energyDrain: 0.42 },
+    RECOLOR: { recolorRate: 6, skipP: 0.06, energyDrain: 0.18 },
+    SPEED_GATE: { parallelGain: 1.35, tangentialGain: 1, engageP: 0.88, energyDrain: 0.28 },
+    SWIRL: { omega: 220, decay: 2.2, omegaJitter: 0.14, energyDrain: 0.22 },
+    TELEPORT: { linkId: 0, malfunctionP: 0, coneDeg: 12, exitJitterDeg: 4, energyDrain: 0.35 },
+    MEMBRANE: { leakP: 0.08, wobbleP: 0.06, energyDrain: 0.26 },
     BEAM_SHAPER: {
       slitW: 0.22, slitOffset: 0, edgeSoft: 0.06, mode: 'bounce', absorbP: 0.4, bounceSoftP: 0.12,
+      energyDrain: 0.22,
     },
-    RESONATOR: { amplitude: 420, freq: 3.5, ampJitter: 0.14 },
-    COLLIMATOR: { divisions: 8, snapP: 0.85, jitterDeg: 4, microJitterDeg: 1.2 },
-    BUFFER: { maxK: 40, releaseRate: 18, burstOnFull: 1, slipP: 0.022 },
+    RESONATOR: { amplitude: 420, freq: 3.5, ampJitter: 0.14, energyDrain: 0.26 },
+    COLLIMATOR: { divisions: 8, snapP: 0.85, jitterDeg: 4, microJitterDeg: 1.2, energyDrain: 0.22 },
+    BUFFER: { maxK: 40, releaseRate: 18, burstOnFull: 1, slipP: 0.022, energyDrain: 0.32 },
   };
   return Object.assign({}, p[kind] || {});
 }
@@ -214,7 +321,7 @@ function createState() {
 }
 
 function placeTile(state, kind, wx, wy, rotation, params) {
-  const ok = canPlaceTileCenter(state, wx, wy, null);
+  const ok = canPlaceTileCenter(state, wx, wy, null, kind);
   if (!ok) return null;
   const tile = {
     id: state.nextTileId++,
@@ -319,13 +426,14 @@ function worldSize(state) {
   return { w: gridW * cellPx, h: gridH * cellPx, cp: cellPx };
 }
 
-function bounceWalls(state, p) {
+/** Particles despawn when center leaves the board (no wall reflection). */
+function cullParticlesOutside(state, p) {
   const { w, h } = worldSize(state);
-  const r = 1.2;
-  if (p.x < r) { p.x = r; p.vx = Math.abs(p.vx); }
-  if (p.x > w - r) { p.x = w - r; p.vx = -Math.abs(p.vx); }
-  if (p.y < r) { p.y = r; p.vy = Math.abs(p.vy); }
-  if (p.y > h - r) { p.y = h - r; p.vy = -Math.abs(p.vy); }
+  if (p.x < 0 || p.x > w || p.y < 0 || p.y > h) {
+    p._dead = true;
+    return true;
+  }
+  return false;
 }
 
 function reflectMirror(vx, vy, rot) {
@@ -403,15 +511,22 @@ function emitFromSources(state, dt) {
         if ((t._energyLeft ?? 0) < cost) break;
         t._energyLeft -= cost;
       }
-      const cid = pr.colorId in COLOR_HEX ? pr.colorId : 'red';
+      const cid = pr.colorId in COLOR_HEX ? pr.colorId : 'black';
+      const { hw, hh } = hitboxHalf('SOURCE');
+      const jx = (Math.random() - 0.5) * 2 * hw * cp * 0.92;
+      const jy = (Math.random() - 0.5) * 2 * hh * cp * 0.92;
+      const spawnE = clamp(Number(pr.spawnParticleEnergy) || 100, 1, 1e5);
       state.particles.push({
         id: state.nextParticleId++,
-        x: cx + (Math.random() - 0.5) * cp * 0.04,
-        y: cy + (Math.random() - 0.5) * cp * 0.04,
+        x: cx + jx,
+        y: cy + jy,
         vx: Math.cos(ang) * sp,
         vy: Math.sin(ang) * sp,
         colorId: cid,
         lastTileId: t.id,
+        energy: spawnE,
+        energyMax: spawnE,
+        glyph: randomParticleGlyph(),
       });
       bumpTileInteractGlow(t, cid, INTERACT_GLOW_EMIT);
       budget--;
@@ -429,6 +544,12 @@ function bumpTileInteractGlow(tile, colorId, delta) {
   const g = tile._interactGlow || (tile._interactGlow = { colorId: cid, level: 0 });
   g.colorId = cid;
   g.level = Math.min(0.93, g.level + delta);
+}
+
+/** Tile hit flash fill: raw `black` matches tile ink so use a visible grey; chromatic colors read as-is. */
+function interactGlowDisplayHex(colorId) {
+  if (!colorId || colorId === 'black') return '#888888';
+  return COLOR_HEX[colorId] || '#888888';
 }
 
 function decayTileInteractGlows(state, dt) {
@@ -452,6 +573,12 @@ function beamPasses(fx, fy, tile) {
     return Math.random() > t;
   }
   return false;
+}
+
+/** Slit axis = local ly (perpendicular to rotation); fy = ly/cp+0.5 in tile-normalized space. */
+function beamLocalNormalized(tile, px, py, cp) {
+  const { lx, ly } = localFromWorld(tile, px, py);
+  return { fx: lx / cp + 0.5, fy: ly / cp + 0.5 };
 }
 
 function applyCellForces(state, p, dt, tile, cp) {
@@ -555,8 +682,7 @@ function applyCellForces(state, p, dt, tile, cp) {
     return;
   }
   if (k === 'BEAM_SHAPER') {
-    const fx = (p.x - (tile.x - cp * 0.5)) / cp;
-    const fy = (p.y - (tile.y - cp * 0.5)) / cp;
+    const { fx, fy } = beamLocalNormalized(tile, p.x, p.y, cp);
     if (!beamPasses(fx, fy, tile) && (tile.params.mode || 'bounce') === 'absorb') {
       const base = (tile.params.absorbP || 0.3) * dt * 45;
       if (Math.random() < clamp(base * (0.82 + 0.36 * Math.random()), 0, 0.98)) {
@@ -586,6 +712,8 @@ function processBuffers(state, dt) {
         const b = buf.shift();
         const ang = (t.rotation * Math.PI) / 2 + (Math.random() * 0.2 - 0.1);
         const sp = hypot(b.vx, b.vy) || 80;
+        const em = b.energyMax != null ? b.energyMax : (b.energy != null ? b.energy : 100);
+        const e0 = b.energy != null ? b.energy : em;
         state.particles.push({
           id: state.nextParticleId++,
           x: t.x,
@@ -594,6 +722,9 @@ function processBuffers(state, dt) {
           vy: Math.sin(ang) * sp,
           colorId: b.colorId,
           lastTileId: t.id,
+          energy: e0,
+          energyMax: em,
+          glyph: b.glyph || randomParticleGlyph(),
         });
         bumpTileInteractGlow(t, b.colorId, INTERACT_GLOW_EMIT);
       }
@@ -609,6 +740,8 @@ function processBuffers(state, dt) {
         if (!b) break;
         const ang = (t.rotation * Math.PI) / 2 + (Math.random() * 2 - 1) * 0.18;
         const sp = hypot(b.vx, b.vy) || 80;
+        const em = b.energyMax != null ? b.energyMax : (b.energy != null ? b.energy : 100);
+        const e0 = b.energy != null ? b.energy : em;
         state.particles.push({
           id: state.nextParticleId++,
           x: t.x + (Math.random() - 0.5) * cp * 0.05,
@@ -617,6 +750,9 @@ function processBuffers(state, dt) {
           vy: Math.sin(ang) * sp,
           colorId: b.colorId,
           lastTileId: t.id,
+          energy: e0,
+          energyMax: em,
+          glyph: b.glyph || randomParticleGlyph(),
         });
         bumpTileInteractGlow(t, b.colorId, INTERACT_GLOW_EMIT);
       }
@@ -634,9 +770,11 @@ function subStep(state, dt, telePairs) {
 
   for (const p of state.particles) {
     p._dead = false;
+    ensureParticleEnergyFields(p);
+    ensureParticleGlyph(p);
     p.x += p.vx * dt;
     p.y += p.vy * dt;
-    bounceWalls(state, p);
+    if (cullParticlesOutside(state, p)) continue;
 
     const t = tileAtPoint(state, p.x, p.y);
     const tid = t ? t.id : null;
@@ -649,13 +787,20 @@ function subStep(state, dt, telePairs) {
       continue;
     }
 
+    applyTileEnergyDrain(t, p);
+    if (p._dead) continue;
+
     if (t.kind === 'BUFFER') {
       const buf = t._buf || (t._buf = []);
       const maxK = Math.max(1, t.params.maxK | 0);
       if (buf.length < maxK) {
         const slip = clamp(t.params.slipP ?? 0.022, 0, 0.22);
         if (Math.random() >= slip) {
-          buf.push({ vx: p.vx, vy: p.vy, colorId: p.colorId });
+          buf.push({
+            vx: p.vx, vy: p.vy, colorId: p.colorId,
+            energy: p.energy, energyMax: p.energyMax ?? p.energy,
+            glyph: p.glyph,
+          });
           bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE);
           p.lastTileId = tid;
           continue;
@@ -667,6 +812,7 @@ function subStep(state, dt, telePairs) {
     }
 
     if (t.kind === 'SPLITTER' && entered && Math.random() < clamp(t.params.splitP ?? 1, 0, 1)) {
+      ensureParticleGlyph(p);
       bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE);
       const f = t.params.childSpeed || 0.72;
       const sp0 = hypot(p.vx, p.vy) * f;
@@ -674,18 +820,31 @@ function subStep(state, dt, telePairs) {
       const jit = ((t.params.angleJitterDeg ?? 3) * Math.PI) / 180;
       const a0 = (t.rotation * Math.PI) / 2 + (Math.random() * 2 - 1) * jit;
       const a1 = ((t.rotation + 1) * Math.PI) / 2 + (Math.random() * 2 - 1) * jit;
-      splits.push({
-        id: state.nextParticleId++,
-        x: p.x, y: p.y,
-        vx: Math.cos(a0) * sp0, vy: Math.sin(a0) * sp0,
-        colorId: p.colorId, lastTileId: tid,
-      });
-      splits.push({
-        id: state.nextParticleId++,
-        x: p.x, y: p.y,
-        vx: Math.cos(a1) * sp1, vy: Math.sin(a1) * sp1,
-        colorId: p.colorId, lastTileId: tid,
-      });
+      const em = p.energyMax ?? p.energy ?? 100;
+      const floorE = em * PARTICLE_ENERGY_REMOVE_FRAC;
+      const e0 = Math.max(0, (p.energy ?? em) * 0.46);
+      const e1 = Math.max(0, (p.energy ?? em) * 0.46);
+      const gSplit = p.glyph;
+      if (e0 > floorE) {
+        splits.push({
+          id: state.nextParticleId++,
+          x: p.x, y: p.y,
+          vx: Math.cos(a0) * sp0, vy: Math.sin(a0) * sp0,
+          colorId: p.colorId, lastTileId: tid,
+          energy: e0, energyMax: em,
+          glyph: gSplit,
+        });
+      }
+      if (e1 > floorE) {
+        splits.push({
+          id: state.nextParticleId++,
+          x: p.x, y: p.y,
+          vx: Math.cos(a1) * sp1, vy: Math.sin(a1) * sp1,
+          colorId: p.colorId, lastTileId: tid,
+          energy: e1, energyMax: em,
+          glyph: gSplit,
+        });
+      }
       continue;
     }
 
@@ -696,8 +855,9 @@ function subStep(state, dt, telePairs) {
         bumpTileInteractGlow(partner, p.colorId, INTERACT_GLOW_DISCRETE * 0.85);
         const pcx = partner.x;
         const pcy = partner.y;
-        p.x = pcx + (Math.random() * 0.2 - 0.1) * cp;
-        p.y = pcy + (Math.random() * 0.2 - 0.1) * cp;
+        const { hw, hh } = hitboxHalf('TELEPORT');
+        p.x = pcx + (Math.random() - 0.5) * 2 * hw * cp * 0.88;
+        p.y = pcy + (Math.random() - 0.5) * 2 * hh * cp * 0.88;
         const cone = ((t.params.coneDeg || 10) * Math.PI) / 180;
         const ej = ((t.params.exitJitterDeg ?? 4) * Math.PI) / 180;
         const base = (partner.rotation * Math.PI) / 2;
@@ -753,12 +913,16 @@ function subStep(state, dt, telePairs) {
     }
 
     if (t.kind === 'BEAM_SHAPER' && entered) {
-      const fx = (p.x - (t.x - cp * 0.5)) / cp;
-      const fy = (p.y - (t.y - cp * 0.5)) / cp;
+      const { fx, fy } = beamLocalNormalized(t, p.x, p.y, cp);
       if (!beamPasses(fx, fy, t) && (t.params.mode || 'bounce') === 'bounce') {
         const soft = clamp(t.params.bounceSoftP ?? 0.12, 0, 0.4);
         if (Math.random() > soft) {
-          p.vy = -p.vy;
+          const r = t.rotation & 3;
+          const n2x = -DIR_DY[r];
+          const n2y = DIR_DX[r];
+          const vn = dot(p.vx, p.vy, n2x, n2y);
+          p.vx -= 2 * vn * n2x;
+          p.vy -= 2 * vn * n2y;
           bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE * 0.75);
         }
       }
@@ -828,10 +992,8 @@ function drawArrow(tipX, tipY, rot, cx, cy, klass) {
   return poly;
 }
 
-function drawTileG(tile, ghost, cellSize) {
-  const d = cellSize || 56;
-  const scale = d / 56;
-  const root = svg('g', { transform: `scale(${scale})` });
+function drawTileG(tile, ghost, _cellSize) {
+  const root = svg('g', null);
   const cp = 56;
   const cx = cp / 2;
   const cy = cp / 2;
@@ -839,7 +1001,12 @@ function drawTileG(tile, ghost, cellSize) {
   const arrowC = ghost ? 'ghost-arrow' : 'tile-arrow';
   const labelC = ghost ? 'tile-label ghost-label' : 'tile-label';
   const g = svg('g', null);
-  g.appendChild(svg('rect', { x: 3, y: 3, width: cp - 6, height: cp - 6, class: frameC }));
+  const compactChrome = tile.kind === 'SOURCE' || tile.kind === 'REFLECTOR' || tile.kind === 'MEMBRANE'
+    || tile.kind === 'BEAM_SHAPER' || tile.kind === 'ABSORBER' || tile.kind === 'GOAL'
+    || tile.kind === 'RECOLOR' || tile.kind === 'TELEPORT';
+  if (!compactChrome) {
+    g.appendChild(svg('rect', { x: 3, y: 3, width: cp - 6, height: cp - 6, class: frameC }));
+  }
 
   const meta = KIND_META[tile.kind];
   const lab = meta ? meta.label : tile.kind;
@@ -849,8 +1016,9 @@ function drawTileG(tile, ghost, cellSize) {
 
   if (tile.kind === 'SOURCE') {
     const col = COLOR_HEX[tile.params.colorId] || '#000';
-    g.appendChild(svg('circle', { cx, cy, r: 11, fill: col, stroke: '#000', 'stroke-width': 1 }));
-    g.appendChild(drawArrow(cx + tip - 4, cy, rot, cx, cy, arrowC));
+    g.appendChild(svg('rect', { x: cx - 10, y: cy - 10, width: 20, height: 20, class: frameC, rx: 2 }));
+    g.appendChild(svg('circle', { cx, cy, r: 6.5, fill: col, stroke: '#000', 'stroke-width': 1 }));
+    g.appendChild(drawArrow(cx + 12, cy, rot, cx, cy, arrowC));
   } else if (tile.kind === 'FOCUS') {
     g.appendChild(svg('path', {
       d: `M ${cx} ${cy - 10} L ${cx + 12} ${cy} L ${cx} ${cy + 10} L ${cx - 12} ${cy} Z`,
@@ -869,18 +1037,18 @@ function drawTileG(tile, ghost, cellSize) {
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'REFLECTOR') {
     g.appendChild(svg('line', {
-      x1: cx, y1: 6, x2: cx, y2: cp - 6,
+      x1: cx - 25, y1: cy, x2: cx + 25, y2: cy,
       class: 'tile-stroke',
-      'stroke-width': 2,
-      transform: `rotate(${rot * 90 + 45} ${cx} ${cy})`,
+      'stroke-width': 2.5,
+      transform: `rotate(${rot * 90} ${cx} ${cy})`,
     }));
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'ABSORBER') {
-    g.appendChild(svg('rect', { x: cx - 10, y: cy - 10, width: 20, height: 20, class: 'tile-stroke', 'stroke-dasharray': '2 2' }));
+    g.appendChild(svg('rect', { x: cx - 8, y: cy - 8, width: 16, height: 16, class: 'tile-stroke', 'stroke-dasharray': '2 2' }));
     g.appendChild(svg('text', { x: cx, y: cy + 3, class: labelC, 'font-size': '9' }, lab));
   } else if (tile.kind === 'GOAL') {
-    g.appendChild(svg('circle', { cx, cy, r: 14, class: 'tile-stroke' }));
-    g.appendChild(svg('circle', { cx, cy, r: 6, class: 'tile-stroke' }));
+    g.appendChild(svg('circle', { cx, cy, r: 12, class: 'tile-stroke' }));
+    g.appendChild(svg('circle', { cx, cy, r: 5, class: 'tile-stroke' }));
     g.appendChild(svg('text', { x: cx, y: cy + 20, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'SPLITTER') {
     g.appendChild(svg('path', {
@@ -890,7 +1058,7 @@ function drawTileG(tile, ghost, cellSize) {
     }));
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'RECOLOR') {
-    g.appendChild(svg('rect', { x: cx - 12, y: cy - 8, width: 24, height: 16, class: 'tile-stroke' }));
+    g.appendChild(svg('rect', { x: cx - 11, y: cy - 7, width: 22, height: 14, class: 'tile-stroke' }));
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'SPEED_GATE') {
     g.appendChild(svg('polygon', {
@@ -906,15 +1074,22 @@ function drawTileG(tile, ghost, cellSize) {
     }));
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'TELEPORT') {
-    g.appendChild(svg('rect', { x: cx - 12, y: cy - 12, width: 24, height: 24, class: 'tile-stroke', rx: 3 }));
+    g.appendChild(svg('rect', { x: cx - 9, y: cy - 9, width: 18, height: 18, class: 'tile-stroke', rx: 2 }));
     g.appendChild(svg('text', { x: cx, y: cy + 4, class: labelC, 'font-size': '10' }, String(tile.params.linkId | 0)));
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '7' }, lab));
   } else if (tile.kind === 'MEMBRANE') {
-    g.appendChild(svg('line', { x1: 6, y1: cy, x2: cp - 6, y2: cy, class: 'tile-stroke', 'stroke-width': 2 }));
+    g.appendChild(svg('line', {
+      x1: cx, y1: 5, x2: cx, y2: cp - 5,
+      class: 'tile-stroke',
+      'stroke-width': 2.5,
+      transform: `rotate(${rot * 90} ${cx} ${cy})`,
+    }));
     g.appendChild(drawArrow(cx + tip - 6, cy, rot, cx, cy, arrowC));
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'BEAM_SHAPER') {
-    g.appendChild(svg('rect', { x: cx - 14, y: cy - 4, width: 28, height: 8, class: 'tile-stroke' }));
+    const slit = svg('g', { transform: `rotate(${rot * 90} ${cx} ${cy})` });
+    slit.appendChild(svg('rect', { x: cx - 22, y: cy - 3.5, width: 44, height: 7, class: 'tile-stroke' }));
+    g.appendChild(slit);
     g.appendChild(svg('text', { x: cx, y: cy + 16, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'RESONATOR') {
     g.appendChild(svg('path', { d: `M ${cx - 12} ${cy} Q ${cx} ${cy - 14} ${cx + 12} ${cy}`, class: 'tile-stroke', fill: 'none' }));
@@ -933,6 +1108,7 @@ function drawTileG(tile, ghost, cellSize) {
     g.appendChild(drawArrow(cx + tip - 4, cy, rot, cx, cy, arrowC));
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else {
+    g.appendChild(svg('rect', { x: 3, y: 3, width: cp - 6, height: cp - 6, class: frameC }));
     g.appendChild(svg('text', { x: cx, y: cy, class: labelC, 'font-size': '9' }, lab));
   }
 
@@ -960,18 +1136,19 @@ function renderBoardSvg(state, host) {
   host.appendChild(layerHover);
 
   const innerDesign = 56;
+  const sc = cp / innerDesign;
   for (const tile of state.tiles.values()) {
     const root = drawTileG(tile, false, cp);
-    root.setAttribute('transform', `translate(${tile.x - cp / 2} ${tile.y - cp / 2})`);
+    root.setAttribute('transform', `translate(${tile.x - cp / 2} ${tile.y - cp / 2}) scale(${sc})`);
     root.setAttribute('data-tile-id', String(tile.id));
     if (state.ui.inspectorTileId === tile.id) {
       const fr = root.querySelector('.tile-frame, .ghost-frame');
       if (fr) fr.classList.add('inspector-target');
     }
     if (tile._interactGlow && tile._interactGlow.level > 0.004) {
-      const hex = COLOR_HEX[tile._interactGlow.colorId] || '#888888';
+      const hex = interactGlowDisplayHex(tile._interactGlow.colorId);
       const lv = tile._interactGlow.level;
-      const op = Math.min(0.48, Math.pow(lv, 0.9) * 0.44);
+      const op = Math.min(0.72, 0.12 + Math.pow(lv, 0.85) * 0.62);
       root.appendChild(svg('rect', {
         class: 'tile-interact-glow',
         x: 4,
@@ -991,7 +1168,7 @@ function renderBoardSvg(state, host) {
   if (hw) {
     const ex = tileAtPoint(state, hw.x, hw.y);
     if (state.ui.brush) {
-      const ok = canPlaceTileCenter(state, hw.x, hw.y, null);
+      const ok = canPlaceTileCenter(state, hw.x, hw.y, null, state.ui.brush.kind);
       if (ok && !ex) {
         const ghost = {
           kind: state.ui.brush.kind,
@@ -999,7 +1176,7 @@ function renderBoardSvg(state, host) {
           params: state.ui.brush.params || defaultParams(state.ui.brush.kind),
         };
         const gg = drawTileG(ghost, true, cp);
-        gg.setAttribute('transform', `translate(${ok.x - cp / 2} ${ok.y - cp / 2})`);
+        gg.setAttribute('transform', `translate(${ok.x - cp / 2} ${ok.y - cp / 2}) scale(${cp / 56})`);
         layerHover.appendChild(gg);
       }
     } else if (ex) {
@@ -1030,12 +1207,18 @@ function renderParticlesCanvas(state) {
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
-  const r = 1.35;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
   for (const p of state.particles) {
-    ctx.fillStyle = COLOR_HEX[p.colorId] || '#000';
-    ctx.beginPath();
-    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
-    ctx.fill();
+    ensureParticleEnergyFields(p);
+    ensureParticleGlyph(p);
+    const maxE = Math.max(1e-6, p.energyMax || 1);
+    const tNorm = clamp((p.energy != null ? p.energy : maxE) / maxE, 0, 1);
+    const fontPx = 5 + tNorm * 9.5;
+    const alpha = 0.14 + tNorm * 0.88;
+    ctx.font = `${fontPx}px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace`;
+    ctx.fillStyle = hexToRgba(COLOR_HEX[p.colorId] || '#111111', alpha);
+    ctx.fillText(p.glyph, p.x, p.y);
   }
 }
 
@@ -1230,6 +1413,10 @@ function renderTileInspector() {
       else delete tile._energyLeft;
       persistParams();
     });
+    bindParamSlider(body, 'spawn particle energy', 1, 800, 1, P.spawnParticleEnergy ?? 100, v => {
+      tile.params.spawnParticleEnergy = Math.max(1, v | 0);
+      persistParams();
+    });
     const cr = document.createElement('div');
     cr.className = 'color-row';
     for (const c of COLOR_IDS) {
@@ -1341,6 +1528,14 @@ function renderTileInspector() {
     bindParamSlider(body, 'release / sec', 0.5, 80, 0.5, P.releaseRate, v => { tile.params.releaseRate = v; persistParams(); });
     bindParamSlider(body, 'slip past p', 0, 0.2, 0.005, P.slipP ?? 0.022, v => { tile.params.slipP = v; persistParams(); });
     bindParamSlider(body, 'burst when full', 0, 1, 1, P.burstOnFull | 0, v => { tile.params.burstOnFull = v | 0; persistParams(); });
+  }
+
+  if (tile.kind !== 'SOURCE') {
+    const defDrain = defaultParams(tile.kind).energyDrain ?? 0;
+    bindParamSlider(body, 'energy drain / tick', 0, 12, 0.02, P.energyDrain ?? defDrain, v => {
+      tile.params.energyDrain = Math.max(0, v);
+      persistParams();
+    });
   }
 
   host.appendChild(body);
@@ -1529,7 +1724,7 @@ function attachBoardInput(boardEl) {
 
     if (APP.state.ui.brush) {
       const b = APP.state.ui.brush;
-      if (canPlaceTileCenter(APP.state, world.x, world.y, null)) {
+      if (canPlaceTileCenter(APP.state, world.x, world.y, null, b.kind)) {
         withBoardEdit(APP.state, () => !!placeTile(APP.state, b.kind, world.x, world.y, b.rotation, b.params));
       }
       APP.render();
@@ -1656,7 +1851,7 @@ function attachUI() {
         e.preventDefault();
         APP.state.ui.brush = { kind, rotation: 0, params: defaultParams(kind) };
         const hw = APP.state.ui.hoverWorld;
-        if (hw && canPlaceTileCenter(APP.state, hw.x, hw.y, null)) {
+        if (hw && canPlaceTileCenter(APP.state, hw.x, hw.y, null, APP.state.ui.brush.kind)) {
           const b = APP.state.ui.brush;
           withBoardEdit(APP.state, () => !!placeTile(APP.state, b.kind, hw.x, hw.y, b.rotation, b.params));
         }

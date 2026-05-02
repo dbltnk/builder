@@ -279,10 +279,6 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   pointer-events: none;
 }
 
-.tile-interact-glow {
-  mix-blend-mode: plus-lighter;
-}
-
 .tile-inspector {
   font-size: 11px;
   line-height: 1.45;
