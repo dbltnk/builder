@@ -441,6 +441,10 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   padding: 8px 14px;
 }
 .menu-dropdown button:last-child { border-bottom: none; }
+.menu-dropdown button.menu-level-current {
+  background: var(--fg);
+  color: var(--bg);
+}
 
 /* ---------- Misc ---------- */
 
