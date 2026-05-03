@@ -37,7 +37,28 @@ const COLOR_HEX = {
   green: '#228844',
 };
 
+/** CSS `conic-gradient` stops for the five channels (used by random swatches). */
+function colorWheelConicStopsCss() {
+  const n = COLOR_IDS.length;
+  return COLOR_IDS.map((c, i) => {
+    const a0 = (i / n) * 360;
+    const a1 = ((i + 1) / n) * 360;
+    return `${COLOR_HEX[c]} ${a0}deg ${a1}deg`;
+  }).join(', ');
+}
+
+/** Inspector swatch: full channel wheel for “random” spawn / assign. */
+function styleSwatchRandomChannels(el) {
+  el.style.background = `conic-gradient(${colorWheelConicStopsCss()})`;
+}
+
 const FIXED_DT = 1 / 120;
+/**
+ * VELOCITY builds a target speed scale from ∥/⊥ gains; without dt limiting, values near 0.9/1.1
+ * compound ~120×/simulated second and feel extreme. This rate pulls actual scale toward that target per substep
+ * (higher = snappier; ~3–4 is a workable play range vs imperceptible at ~1).
+ */
+const VELOCITY_TOWARD_TARGET_HZ = 3.35;
 /** Interaction highlight: e-folding time (seconds); short so dense hits stay gentle. */
 const INTERACT_GLOW_DECAY_S = 0.05;
 const INTERACT_GLOW_DISCRETE = 0.2;
@@ -106,9 +127,8 @@ const SANDBOX = {
   gridH: 18,
   cellPx: 36,
   palette: [
-    'GOAL', 'SOURCE', 'SPEED_GATE', 'RECOLOR', 'ABSORBER', 'BUFFER',
-    'REFLECTOR', 'MEMBRANE', 'DIFFUSER', 'TELEPORT', 'RESONATOR', 'SWIRL',
-    'FOCUS', 'SPLITTER', 'BEAM_SHAPER', 'COLLIMATOR',
+    'SOURCE', 'GOAL', 'VELOCITY', 'RECOLOR', 'ABSORBER', 'BUFFER',
+    'REFLECTOR', 'MEMBRANE', 'DIFFUSER', 'SPLITTER', 'TELEPORT', 'RESONATOR', 'SWIRL',
   ],
 };
 
@@ -183,29 +203,26 @@ const SCALE_MAX = 3;
  * Keep circle only where the ink is actually circular; otherwise use KIND_BOX to match strokes/frames.
  */
 const KIND_CIRCLE = {
-  /** Only true circular ink (concentric rings); outer ring r = 12 author px. */
-  GOAL: { r: 12 / INNER_DESIGN_PX },
+  /** Only true circular ink (concentric rings); outer ring r = 13 author px. */
+  GOAL: { r: 13 / INNER_DESIGN_PX },
 };
 
 /** Box colliders in tile-local axes at rotationRad=0; hw, hh = half extents as fractions of cp. */
 const KIND_BOX = {
   /** Central 20×20 chrome in author px. */
-  SOURCE: { hw: 10 / INNER_DESIGN_PX, hh: 10 / INNER_DESIGN_PX },
+  SOURCE: { hw: 12 / INNER_DESIGN_PX, hh: 12 / INNER_DESIGN_PX },
   /** Same outer frame square as the sprite (`!compactChrome` branch). */
-  FOCUS: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
   DIFFUSER: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
   REFLECTOR: { hw: 0.48, hh: 0.09 },
   ABSORBER: { hw: 0.16, hh: 0.16 },
   SPLITTER: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  /** Stroke rect 22×14 centered. */
-  RECOLOR: { hw: 11 / INNER_DESIGN_PX, hh: 7 / INNER_DESIGN_PX },
-  SPEED_GATE: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
+  /** Stroke rect ~26×16 centered (matches draw chrome). */
+  RECOLOR: { hw: 13 / INNER_DESIGN_PX, hh: 8 / INNER_DESIGN_PX },
+  VELOCITY: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
   SWIRL: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  TELEPORT: { hw: 9 / INNER_DESIGN_PX, hh: 9 / INNER_DESIGN_PX },
+  TELEPORT: { hw: 11 / INNER_DESIGN_PX, hh: 11 / INNER_DESIGN_PX },
   MEMBRANE: { hw: 0.08, hh: 0.48 },
-  BEAM_SHAPER: { hw: 0.46, hh: 0.10 },
   RESONATOR: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  COLLIMATOR: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
   BUFFER: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
 };
 
@@ -363,10 +380,10 @@ function poissonSample(lambda) {
 function defaultParams(kind) {
   const p = {
     SOURCE: {
-      rate: 120,
+      rate: 40,
       speedMin: 80,
-      speedMax: 140,
-      sprayDeg: 4,
+      speedMax: 120,
+      sprayDeg: 8,
       colorId: 'black',
       burst: 0.12,
       timingNoise: 0.22,
@@ -376,49 +393,46 @@ function defaultParams(kind) {
       spawnParticleEnergy: 100,
       energyDrain: 0,
     },
-    FOCUS: { strength: 4, hitP: 0.9, energyDrain: 0.38 },
     DIFFUSER: { spreadDeg: 22, spikeP: 0.09, spikeMul: 1.55, energyDrain: 0.28 },
     REFLECTOR: { scatterDeg: 4, scatterP: 0.72, energyDrain: 0.22 },
     ABSORBER: { absorbP: 0.35, absorbJitter: 0.18, energyDrain: 1.1 },
     GOAL: { filterColor: 'any', capacity: 0, captureP: 0.93, energyDrain: 0.16 },
-    SPLITTER: { splitP: 1, childSpeed: 0.72, angleJitterDeg: 3, energyDrain: 0.42 },
-    RECOLOR: { recolorRate: 6, skipP: 0.06, energyDrain: 0.18 },
-    SPEED_GATE: { parallelGain: 1.35, tangentialGain: 1, engageP: 0.88, energyDrain: 0.28 },
-    SWIRL: { omega: 220, decay: 2.2, omegaJitter: 0.14, energyDrain: 0.22 },
+    SPLITTER: { splitP: 1, childSpeed: 0.72, splitAngleDeg: 30, angleJitterDeg: 3, energyDrain: 0.42 },
+    RECOLOR: { recolorRate: 6, skipP: 0.06, assignColorId: 'red', energyDrain: 0.18 },
+    VELOCITY: { parallelGain: 1.05, tangentialGain: 1, engageP: 0.88, energyDrain: 0.28 },
+    SWIRL: { omega: 520, decay: 1.25, omegaJitter: 0.14, energyDrain: 0.22 },
     TELEPORT: { linkId: 0, malfunctionP: 0, coneDeg: 12, exitJitterDeg: 4, energyDrain: 0.35 },
     MEMBRANE: { leakP: 0.08, wobbleP: 0.06, energyDrain: 0.26 },
-    BEAM_SHAPER: {
-      slitW: 0.22, slitOffset: 0, edgeSoft: 0.06, mode: 'bounce', absorbP: 0.4, bounceSoftP: 0.12,
-      energyDrain: 0.22,
-    },
-    RESONATOR: { amplitude: 420, freq: 3.5, ampJitter: 0.14, energyDrain: 0.26 },
-    COLLIMATOR: { divisions: 8, snapP: 0.85, jitterDeg: 4, microJitterDeg: 1.2, energyDrain: 0.22 },
+    RESONATOR: { amplitude: 540, freq: 4.2, ampJitter: 0.14, energyDrain: 0.26 },
     BUFFER: { maxK: 40, releaseRate: 18, burstOnFull: 1, slipP: 0.022, energyDrain: 0.32 },
   };
   return Object.assign({}, p[kind] || {});
 }
 
+/** Default placement rotation (radians): horizontal local ink reads vertical on the board. */
+function defaultBrushRotationRad(kind) {
+  if (kind === 'REFLECTOR') return ROTATION_QUARTER_TURN;
+  return 0;
+}
+
 function makeDefaultBrush(kind) {
-  return { kind, rotationRad: 0, scale: 1, params: defaultParams(kind) };
+  return { kind, rotationRad: defaultBrushRotationRad(kind), scale: 1, params: defaultParams(kind) };
 }
 
 /** Labels only; every kind supports move / rotate / scale (same hitbox + draw path as the board). */
 const KIND_META = {
   SOURCE: { label: 'SRC' },
-  FOCUS: { label: 'FOC' },
   DIFFUSER: { label: 'DIF' },
   REFLECTOR: { label: 'REF' },
   ABSORBER: { label: 'ABS' },
   GOAL: { label: 'GOAL' },
   SPLITTER: { label: 'SPL' },
   RECOLOR: { label: 'CLR' },
-  SPEED_GATE: { label: 'SPD' },
+  VELOCITY: { label: 'VEL' },
   SWIRL: { label: 'VOR' },
   TELEPORT: { label: 'TEL' },
-  MEMBRANE: { label: 'MEM' },
-  BEAM_SHAPER: { label: 'SLT' },
+  MEMBRANE: { label: 'SLT' },
   RESONATOR: { label: 'RSN' },
-  COLLIMATOR: { label: 'COL' },
   BUFFER: { label: 'BUF' },
 };
 
@@ -429,8 +443,6 @@ const KIND_META = {
 const KIND_PLAYER_HELP = {
   SOURCE:
     'Adds particles. Fires on a timer into the aim direction; tune rate, spray, speeds, color, and optional total spawn budget.',
-  FOCUS:
-    'Bends trajectories. While crossing, pulls motion toward the center; strength scales with how “through” the tile you are, with a miss chance.',
   DIFFUSER:
     'Adds noise. On each crossing it re-rolls exit angle inside a cone; rarely throws a much wider “spike” turn.',
   REFLECTOR:
@@ -440,23 +452,19 @@ const KIND_PLAYER_HELP = {
   GOAL:
     'Scores catches. Grabs particles that match its color filter (or any); optional capacity caps how many count.',
   SPLITTER:
-    'Multiplies flow. On a hit, can duplicate into two particles (child is slower); angle gets a small jitter.',
+    'Multiplies flow. On a hit, can duplicate into two slower children aimed symmetrically ±split angle from the tile forward axis (default ±30°), plus small jitter.',
   RECOLOR:
-    'Shuffles identity. While overlapping, periodically reassigns glyph and color so streams mix.',
-  SPEED_GATE:
-    'Shapes speed. Boosts motion along the tile’s aim axis vs sideways—fast lane vs slow lane depending on approach.',
+    'Sets channel. While overlapping, periodically assigns the chosen particle color (or a random channel when set to random).',
+  VELOCITY:
+    'Tunes speed only (bearing unchanged). ∥ and ⊥ gains set a target scale from your motion mix; the sim eases |v| toward that target each tick so extremes do not compound instantly, but strong gains still read clearly.',
   SWIRL:
     'Curves paths. Applies twist around the tile while inside; strength falls off with distance from the center.',
   TELEPORT:
     'Moves position. Match link IDs in pairs; entering one exits the other aiming within a cone (can misfire).',
   MEMBRANE:
     'Leaky wall. Mostly blocks, but some crossings leak straight through or wobble along the slit instead of reflecting.',
-  BEAM_SHAPER:
-    'Collimates beams. A narrow slit either bounces or absorbs by chance; very grazing hits can be killed.',
   RESONATOR:
     'Pumps rhythm. While in range, adds an in/out radial shove that oscillates—timing matters for how you cross.',
-  COLLIMATOR:
-    'Quantizes direction. Snaps velocity toward a few fixed spokes around the circle so motion locks to lanes.',
   BUFFER:
     'Queues particles. Holds up to maxK inside the tile, then releases at a set rate (optional burst when full).',
 };
@@ -476,11 +484,7 @@ const INSPECTOR_PARAM_HINTS = {
     burst: 'Adds a slow wandering offset to aim between spawns so the stream gently steers over time.',
     energyBudget: 'Total energy budget for spawning; at 0 the source never runs out. When spent, this source stops creating particles.',
     spawnParticleEnergy: 'Energy each newborn particle starts with (affects how long it survives under drain elsewhere).',
-    spawnColor: 'Color channel for new particles; used by goals, filters, and recolor logic.',
-  },
-  FOCUS: {
-    strength: 'How hard passing particles are pulled toward this tile’s center while overlapping.',
-    hitP: 'Per tick, probability the pull actually runs; lower values let more particles “skip” being bent.',
+    spawnColor: 'Color channel for new particles; “random” picks a channel per spawn. Used by goals and filters.',
   },
   DIFFUSER: {
     spreadDeg: 'Half-width of the cone used to re-roll direction when a particle crosses.',
@@ -502,16 +506,18 @@ const INSPECTOR_PARAM_HINTS = {
   SPLITTER: {
     splitP: 'On interaction, chance to duplicate the particle into an extra child.',
     childSpeed: 'Speed multiplier applied to the child particle relative to the parent.',
-    angleJitterDeg: 'Random ±degrees added to the child’s exit direction.',
+    splitAngleDeg: 'Each child is aimed this many degrees away from the forward axis on opposite sides (+ and −), following tile rotation.',
+    angleJitterDeg: 'Random ±degrees added to each child’s exit direction after the split angle.',
   },
   RECOLOR: {
-    recolorRate: 'How often (per second) this tile tries to assign a new random glyph/color to overlapping particles.',
+    recolorRate: 'How often (per second) this tile tries to assign its output color to overlapping particles.',
     skipP: 'Chance each tick to skip recoloring so streams do not strobe every frame.',
+    assignColorId: 'Particle color to apply: a fixed channel or “random” for a random channel each time it fires.',
   },
-  SPEED_GATE: {
-    parallelGain: 'Multiplier applied to velocity along the tile’s forward axis when the gate engages.',
-    tangentialGain: 'Multiplier applied to velocity perpendicular to the forward axis.',
-    engageP: 'Per tick, probability the speed gate actually applies its parallel / perpendicular boosts.',
+  VELOCITY: {
+    parallelGain: 'Target scale for motion along the aim axis. Combined with ⊥ gain; |v| moves toward that target each substep without instant runaway.',
+    tangentialGain: 'Target scale for motion across the aim. Weighted with ∥ by speed components; direction stays fixed while speed scales.',
+    engageP: 'Per substep, chance to apply one easing step toward the target speed scale.',
   },
   SWIRL: {
     omega: 'Angular “spin” strength applied to velocity while inside (higher = tighter curving).',
@@ -528,24 +534,10 @@ const INSPECTOR_PARAM_HINTS = {
     leakP: 'Chance per crossing that the particle slips straight through instead of interacting with the barrier.',
     wobbleP: 'Chance to skim along the membrane with a perturbed path instead of a clean reflect or leak.',
   },
-  BEAM_SHAPER: {
-    slitW: 'Width of the slit aperture as a fraction of the tile (narrower = stricter beams).',
-    slitOffset: 'Shifts the slit sideways relative to the tile center (signed fraction).',
-    edgeSoft: 'Softens the slit edges so transitions are gradual instead of hard clipping.',
-    absorbP: 'In absorb mode, per-hit chance the particle is absorbed instead of reflected.',
-    bounceSoftP: 'In bounce mode, chance to skip a perfect bounce and use a softer response.',
-    mode: 'bounce: particles are redirected by the slit. absorb: they may be removed by absorb probability instead.',
-  },
   RESONATOR: {
     amplitude: 'Peak strength of the oscillating radial push/pull while particles are in range.',
     freq: 'Oscillation frequency in Hz-ish units—how fast the shove reverses.',
     ampJitter: 'Randomizes amplitude per tick so the wave is not perfectly periodic.',
-  },
-  COLLIMATOR: {
-    divisions: 'How many equally spaced direction spokes the velocity can snap to around the circle.',
-    snapP: 'Chance on overlap that velocity is snapped toward the nearest spoke direction.',
-    jitterDeg: 'Random angular error added before snapping.',
-    microJitterDeg: 'Tiny extra wobble applied after a snap so motion is not perfectly rigid.',
   },
   BUFFER: {
     maxK: 'Maximum number of particles this buffer can hold at once.',
@@ -570,26 +562,22 @@ const KIND_RUN_ROWS = {
   TELEPORT: [['teleports', 'teleports']],
   ABSORBER: [['absorbed', 'absorber']],
   REFLECTOR: [['reflect hits', 'reflectorHit']],
-  BEAM_SHAPER: [['beam bounce', 'beamBounce'], ['slit kills', 'beamSlitKill']],
 };
 
 /** Nominal material cost per tile kind (Zachtronics-style “optimize cost”). */
 const TILE_MATERIAL_COST = {
   SOURCE: 42,
-  FOCUS: 14,
   DIFFUSER: 16,
   REFLECTOR: 12,
   ABSORBER: 11,
   GOAL: 24,
   SPLITTER: 22,
   RECOLOR: 13,
-  SPEED_GATE: 15,
+  VELOCITY: 15,
   SWIRL: 18,
   TELEPORT: 26,
   MEMBRANE: 14,
-  BEAM_SHAPER: 17,
   RESONATOR: 20,
-  COLLIMATOR: 19,
   BUFFER: 28,
 };
 
@@ -605,8 +593,6 @@ function emptyRunStats() {
     absorber: 0,
     goalCatch: 0,
     reflectorHit: 0,
-    beamBounce: 0,
-    beamSlitKill: 0,
     edgeCull: 0,
   };
 }
@@ -647,7 +633,14 @@ function createState() {
   };
 }
 
+/** Persisted boards may use retired kind names; normalize before sim / palette. */
+function migrateTileKind(kind) {
+  if (kind === 'SPEED_GATE') return 'VELOCITY';
+  return kind;
+}
+
 function placeTile(state, kind, wx, wy, rotationRad, scale, params) {
+  kind = migrateTileKind(kind);
   const ok = canPlaceTileCenter(state, wx, wy, null, kind);
   if (!ok) return null;
   const tile = {
@@ -855,7 +848,8 @@ function emitFromSources(state, dt) {
         if ((t._energyLeft ?? 0) < cost) break;
         t._energyLeft -= cost;
       }
-      const cid = pr.colorId in COLOR_HEX ? pr.colorId : 'black';
+      const rawC = pr.colorId;
+      const cid = rawC === 'random' ? randomColorId() : (rawC in COLOR_HEX ? rawC : 'black');
       const sh = scaledShape(t);
       const spawnR = (sh.kind === 'circle' ? sh.r : hypot(sh.hw, sh.hh)) * cp * 0.92;
       const { x: jx, y: jy } = randomDiscOffsetPx(spawnR);
@@ -942,31 +936,6 @@ function decayTileInteractGlows(state, dt) {
   }
 }
 
-function beamPasses(fx, fy, tile) {
-  const pr = tile.params;
-  const cy = 0.5 + (pr.slitOffset || 0);
-  const hw = (pr.slitW || 0.2) / 2;
-  const dist = Math.abs(fy - cy);
-  if (dist < hw) return true;
-  const soft = pr.edgeSoft || 0;
-  if (soft > EPS && dist < hw + soft) {
-    const t = (dist - hw) / soft;
-    return Math.random() > t;
-  }
-  return false;
-}
-
-/** Slit in local space; slitW / slitOffset are fractions of local half-extent. */
-function beamLocalNormalized(tile, px, py, cp) {
-  const { lx, ly } = localFromWorld(tile, px, py);
-  const sh = scaledShape(tile);
-  const hw = sh.kind === 'circle' ? sh.r : sh.hw;
-  const hh = sh.kind === 'circle' ? sh.r : sh.hh;
-  const denomX = cp * 2 * hw;
-  const denomY = cp * 2 * hh;
-  return { fx: lx / denomX + 0.5, fy: ly / denomY + 0.5 };
-}
-
 function applyCellForces(state, p, dt, tile, cp) {
   const tcx = tile.x;
   const tcy = tile.y;
@@ -974,17 +943,6 @@ function applyCellForces(state, p, dt, tile, cp) {
   const ry = p.y - tcy;
   const k = tile.kind;
 
-  if (k === 'FOCUS') {
-    if (Math.random() > clamp(tile.params.hitP ?? 0.9, 0.4, 0.999)) return;
-    const ax = tileAxes(tile);
-    const [tx, ty] = norm(ax.fx, ax.fy);
-    const sp = hypot(p.vx, p.vy);
-    const s = clamp(tile.params.strength * dt * 3 * (0.88 + 0.24 * Math.random()), 0, 1);
-    const nx = p.vx * (1 - s) + tx * sp * s;
-    const ny = p.vy * (1 - s) + ty * sp * s;
-    p.vx = nx; p.vy = ny;
-    return;
-  }
   if (k === 'DIFFUSER') {
     const spread = ((tile.params.spreadDeg || 10) * Math.PI) / 180;
     let mul = 1;
@@ -998,7 +956,7 @@ function applyCellForces(state, p, dt, tile, cp) {
     p.vy = Math.sin(ang) * sp;
     return;
   }
-  if (k === 'SPEED_GATE') {
+  if (k === 'VELOCITY') {
     if (Math.random() > clamp(tile.params.engageP ?? 0.88, 0.35, 0.999)) return;
     const ax = tileAxes(tile);
     const [nx, ny] = norm(ax.fx, ax.fy);
@@ -1007,17 +965,25 @@ function applyCellForces(state, p, dt, tile, cp) {
     const vpy = para * ny;
     const vxperp = p.vx - vpx;
     const vyperp = p.vy - vpy;
-    const pg = (tile.params.parallelGain ?? 1.2) * (0.94 + 0.12 * Math.random());
-    const tg = (tile.params.tangentialGain ?? 1) * (0.94 + 0.12 * Math.random());
-    p.vx = vpx * pg + vxperp * tg;
-    p.vy = vpy * pg + vyperp * tg;
+    const spd = hypot(p.vx, p.vy);
+    if (spd < EPS) return;
+    const paraMag = Math.abs(para);
+    const perpLen = hypot(vxperp, vyperp);
+    const j = 0.04;
+    const pg = (tile.params.parallelGain ?? 1.05) * (1 + (Math.random() * 2 - 1) * j);
+    const tg = (tile.params.tangentialGain ?? 1) * (1 + (Math.random() * 2 - 1) * j);
+    const rawTarget = (paraMag * pg + perpLen * tg) / spd;
+    const alpha = 1 - Math.exp(-VELOCITY_TOWARD_TARGET_HZ * dt);
+    const blend = 1 + (rawTarget - 1) * alpha;
+    p.vx *= blend;
+    p.vy *= blend;
     return;
   }
   if (k === 'SWIRL') {
     const R = hypot(rx, ry) + EPS;
     const oj = clamp(tile.params.omegaJitter ?? 0.14, 0, 0.45);
-    const om = ((tile.params.omega || 100) / R) * (1 + (Math.random() * 2 - 1) * oj);
-    const dec = Math.exp(-R * (tile.params.decay || 1) / cp);
+    const om = ((tile.params.omega ?? 520) / R) * (1 + (Math.random() * 2 - 1) * oj);
+    const dec = Math.exp(-R * (tile.params.decay ?? 1.25) / cp);
     p.vx += -ry * om * dec * dt;
     p.vy += rx * om * dec * dt;
     return;
@@ -1040,52 +1006,21 @@ function applyCellForces(state, p, dt, tile, cp) {
     const px = -p.vy / sp;
     const py = p.vx / sp;
     const aj = clamp(tile.params.ampJitter ?? 0.14, 0, 0.4);
-    const A = (tile.params.amplitude || 200) * (0.86 + 0.28 * Math.random());
-    const f = tile.params.freq || 2;
+    const A = (tile.params.amplitude ?? 540) * (0.86 + 0.28 * Math.random());
+    const f = tile.params.freq ?? 4.2;
     const ph = state.sim.time * f * Math.PI * 2;
     const kick = A * Math.sin(ph + (Math.random() * 2 - 1) * aj) * dt;
     p.vx += px * kick;
     p.vy += py * kick;
     return;
   }
-  if (k === 'COLLIMATOR') {
-    const div = Math.max(2, (tile.params.divisions | 0) || 8);
-    const snapP = clamp(tile.params.snapP ?? 0.8, 0, 1);
-    const micro = ((tile.params.microJitterDeg ?? 1.2) * Math.PI) / 180;
-    if (Math.random() < snapP) {
-      let ang = Math.atan2(p.vy, p.vx);
-      const step = (Math.PI * 2) / div;
-      const base = tileRotationRad(tile);
-      ang = base + Math.round((ang - base) / step) * step;
-      ang += (Math.random() * 2 - 1) * micro;
-      const spd = hypot(p.vx, p.vy);
-      p.vx = Math.cos(ang) * spd;
-      p.vy = Math.sin(ang) * spd;
-    } else {
-      const jd = ((tile.params.jitterDeg || 3) * Math.PI) / 180;
-      const ang = Math.atan2(p.vy, p.vx) + (Math.random() * 2 - 1) * jd;
-      const spd = hypot(p.vx, p.vy);
-      p.vx = Math.cos(ang) * spd;
-      p.vy = Math.sin(ang) * spd;
-    }
-    return;
-  }
-  if (k === 'BEAM_SHAPER') {
-    const { fx, fy } = beamLocalNormalized(tile, p.x, p.y, cp);
-    if (!beamPasses(fx, fy, tile) && (tile.params.mode || 'bounce') === 'absorb') {
-      const base = (tile.params.absorbP || 0.3) * dt * 45;
-      if (Math.random() < clamp(base * (0.82 + 0.36 * Math.random()), 0, 0.98)) {
-        p._dead = true;
-        state.runStats.beamSlitKill++;
-        return;
-      }
-    }
-    return;
-  }
   if (k === 'RECOLOR') {
     if (Math.random() < clamp(tile.params.skipP ?? 0.06, 0, 0.35)) return;
     const rr = (tile.params.recolorRate || 4) * dt * (0.85 + 0.3 * Math.random());
-    if (Math.random() < rr) p.colorId = randomColorId();
+    if (Math.random() < rr) {
+      const ac = tile.params.assignColorId ?? 'red';
+      p.colorId = ac === 'random' ? randomColorId() : (ac in COLOR_HEX ? ac : 'red');
+    }
   }
 }
 
@@ -1211,10 +1146,11 @@ function subStep(state, dt, telePairs) {
       const sp0 = hypot(p.vx, p.vy) * f;
       const sp1 = hypot(p.vx, p.vy) * f;
       const jit = ((t.params.angleJitterDeg ?? 3) * Math.PI) / 180;
+      const half = ((t.params.splitAngleDeg ?? 30) * Math.PI) / 180;
       const ax = tileAxes(t);
       const base = Math.atan2(ax.fy, ax.fx);
-      const a0 = base + (Math.random() * 2 - 1) * jit;
-      const a1 = base + ROTATION_QUARTER_TURN + (Math.random() * 2 - 1) * jit;
+      const a0 = base + half + (Math.random() * 2 - 1) * jit;
+      const a1 = base - half + (Math.random() * 2 - 1) * jit;
       const em = p.energyMax ?? p.energy ?? 100;
       const floorE = em * PARTICLE_ENERGY_REMOVE_FRAC;
       const e0 = Math.max(0, (p.energy ?? em) * 0.46);
@@ -1315,23 +1251,6 @@ function subStep(state, dt, telePairs) {
       }
     }
 
-    if (t.kind === 'BEAM_SHAPER' && entered) {
-      const { fx, fy } = beamLocalNormalized(t, p.x, p.y, cp);
-      if (!beamPasses(fx, fy, t) && (t.params.mode || 'bounce') === 'bounce') {
-        const soft = clamp(t.params.bounceSoftP ?? 0.12, 0, 0.4);
-        if (Math.random() > soft) {
-          const ax = tileAxes(t);
-          const n2x = ax.rx;
-          const n2y = ax.ry;
-          const vn = dot(p.vx, p.vy, n2x, n2y);
-          p.vx -= 2 * vn * n2x;
-          p.vy -= 2 * vn * n2y;
-          state.runStats.beamBounce++;
-          bumpTileInteractGlow(t, p.colorId, INTERACT_GLOW_DISCRETE * 0.75);
-        }
-      }
-    }
-
     const glowColor = p.colorId;
     const vxa = p.vx, vya = p.vy, c0 = p.colorId;
     if (!skipForces) applyCellForces(state, p, dt, t, cp);
@@ -1393,6 +1312,33 @@ function drawArrow(tipX, tipY, cx, cy, klass) {
   });
 }
 
+/** Pie wedges for “random channel” in SOURCE / RECOLOR tile glyphs. */
+function appendSvgColorWheelDisc(parent, cx, cy, r) {
+  const n = COLOR_IDS.length;
+  for (let i = 0; i < n; i++) {
+    const a0 = (i / n) * Math.PI * 2 - Math.PI / 2;
+    const a1 = ((i + 1) / n) * Math.PI * 2 - Math.PI / 2;
+    const x0 = cx + r * Math.cos(a0);
+    const y0 = cy + r * Math.sin(a0);
+    const x1 = cx + r * Math.cos(a1);
+    const y1 = cy + r * Math.sin(a1);
+    parent.appendChild(svg('path', {
+      d: `M ${cx} ${cy} L ${x0} ${y0} A ${r} ${r} 0 0 1 ${x1} ${y1} Z`,
+      fill: COLOR_HEX[COLOR_IDS[i]],
+      stroke: '#111',
+      'stroke-width': 0.35,
+    }));
+  }
+}
+
+/** Keep short palette label upright while the tile body rotates (REF, SLT / membrane). */
+function appendLabelUpright(g, tile, cx, labY, labelC, fontSize, lab) {
+  const deg = -((tile.rotationRad ?? 0) * 180) / Math.PI;
+  const wrap = svg('g', { transform: `rotate(${deg} ${cx} ${labY})` });
+  wrap.appendChild(svg('text', { x: cx, y: labY, class: labelC, 'font-size': String(fontSize) }, lab));
+  g.appendChild(wrap);
+}
+
 function drawTileG(tile, ghost) {
   const root = svg('g', null);
   const cp = INNER_DESIGN_PX;
@@ -1403,7 +1349,7 @@ function drawTileG(tile, ghost) {
   const labelC = ghost ? 'tile-label ghost-label' : 'tile-label';
   const g = svg('g', null);
   const compactChrome = tile.kind === 'SOURCE' || tile.kind === 'REFLECTOR' || tile.kind === 'MEMBRANE'
-    || tile.kind === 'BEAM_SHAPER' || tile.kind === 'ABSORBER' || tile.kind === 'GOAL'
+    || tile.kind === 'ABSORBER' || tile.kind === 'GOAL'
     || tile.kind === 'RECOLOR' || tile.kind === 'TELEPORT';
   if (!compactChrome) {
     g.appendChild(svg('rect', { x: 3, y: 3, width: cp - 6, height: cp - 6, class: frameC }));
@@ -1415,16 +1361,18 @@ function drawTileG(tile, ghost) {
   const tip = cp / 2 - 3;
 
   if (tile.kind === 'SOURCE') {
-    const col = COLOR_HEX[tile.params.colorId] || '#000';
-    g.appendChild(svg('rect', { x: cx - 10, y: cy - 10, width: 20, height: 20, class: frameC, rx: 2 }));
-    g.appendChild(svg('circle', { cx, cy, r: 6.5, fill: col, stroke: '#000', 'stroke-width': 1 }));
-    g.appendChild(drawArrow(cx + 12, cy, cx, cy, arrowC));
-  } else if (tile.kind === 'FOCUS') {
-    g.appendChild(svg('path', {
-      d: `M ${cx} ${cy - 10} L ${cx + 12} ${cy} L ${cx} ${cy + 10} L ${cx - 12} ${cy} Z`,
-      class: 'tile-stroke',
-    }));
-    g.appendChild(svg('text', { x: cx, y: cy + 16, class: labelC, 'font-size': '8' }, lab));
+    const raw = tile.params.colorId;
+    g.appendChild(svg('rect', { x: cx - 12, y: cy - 12, width: 24, height: 24, class: frameC, rx: 2 }));
+    if (raw === 'random') {
+      const wg = svg('g', null);
+      appendSvgColorWheelDisc(wg, cx, cy, 7.5);
+      g.appendChild(wg);
+    } else {
+      const key = raw in COLOR_HEX ? raw : 'black';
+      g.appendChild(svg('circle', { cx, cy, r: 7.8, fill: COLOR_HEX[key], stroke: '#000', 'stroke-width': 1 }));
+    }
+    g.appendChild(drawArrow(cx + 13, cy, cx, cy, arrowC));
+    g.appendChild(svg('text', { x: cx, y: cy + 19, class: labelC, 'font-size': '11' }, lab));
   } else if (tile.kind === 'DIFFUSER') {
     for (let i = -1; i <= 1; i++) {
       g.appendChild(svg('line', {
@@ -1439,24 +1387,39 @@ function drawTileG(tile, ghost) {
       class: 'tile-stroke',
       'stroke-width': 2.5,
     }));
-    g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
+    appendLabelUpright(g, tile, cx, cy + 18, labelC, 8, lab);
   } else if (tile.kind === 'ABSORBER') {
     g.appendChild(svg('rect', { x: cx - 8, y: cy - 8, width: 16, height: 16, class: 'tile-stroke', 'stroke-dasharray': '2 2' }));
     g.appendChild(svg('text', { x: cx, y: cy + 3, class: labelC, 'font-size': '9' }, lab));
   } else if (tile.kind === 'GOAL') {
-    g.appendChild(svg('circle', { cx, cy, r: 12, class: 'tile-stroke' }));
-    g.appendChild(svg('circle', { cx, cy, r: 5, class: 'tile-stroke' }));
-    g.appendChild(svg('text', { x: cx, y: cy + 20, class: labelC, 'font-size': '8' }, lab));
+    g.appendChild(svg('circle', { cx, cy, r: 13, class: 'tile-stroke' }));
+    g.appendChild(svg('circle', { cx, cy, r: 5.5, class: 'tile-stroke' }));
+    g.appendChild(svg('text', { x: cx, y: cy + 20, class: labelC, 'font-size': '11' }, lab));
   } else if (tile.kind === 'SPLITTER') {
+    const L = 16;
+    const sr = ((tile.params.splitAngleDeg ?? 30) * Math.PI) / 180;
+    const xu = L * Math.cos(sr);
+    const yu = L * Math.sin(sr);
     g.appendChild(svg('path', {
-      d: `M ${cx} ${cy} L ${cx + 14} ${cy - 10} M ${cx} ${cy} L ${cx + 14} ${cy + 10}`,
+      d: `M ${cx} ${cy} L ${cx + xu} ${cy - yu} M ${cx} ${cy} L ${cx + xu} ${cy + yu}`,
       class: 'tile-stroke',
     }));
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'RECOLOR') {
-    g.appendChild(svg('rect', { x: cx - 11, y: cy - 7, width: 22, height: 14, class: 'tile-stroke' }));
-    g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
-  } else if (tile.kind === 'SPEED_GATE') {
+    g.appendChild(svg('rect', { x: cx - 13, y: cy - 8, width: 26, height: 16, class: 'tile-stroke' }));
+    const ac = tile.params.assignColorId ?? 'red';
+    if (ac === 'random') {
+      const wg = svg('g', null);
+      appendSvgColorWheelDisc(wg, cx, cy - 0.5, 6.2);
+      g.appendChild(wg);
+    } else {
+      const key = ac in COLOR_HEX ? ac : 'red';
+      g.appendChild(svg('rect', {
+        x: cx - 9.5, y: cy - 5, width: 19, height: 10, fill: COLOR_HEX[key], stroke: '#111', 'stroke-width': 0.5,
+      }));
+    }
+    g.appendChild(svg('text', { x: cx, y: cy + 19, class: labelC, 'font-size': '11' }, lab));
+  } else if (tile.kind === 'VELOCITY') {
     g.appendChild(svg('polygon', {
       points: `${cx - 12},${cy + 8} ${cx + 12},${cy + 8} ${cx},${cy - 10}`,
       class: 'tile-stroke',
@@ -1469,9 +1432,9 @@ function drawTileG(tile, ghost) {
     }));
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'TELEPORT') {
-    g.appendChild(svg('rect', { x: cx - 9, y: cy - 9, width: 18, height: 18, class: 'tile-stroke', rx: 2 }));
-    g.appendChild(svg('text', { x: cx, y: cy + 4, class: labelC, 'font-size': '10' }, String(tile.params.linkId | 0)));
-    g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '7' }, lab));
+    g.appendChild(svg('rect', { x: cx - 11, y: cy - 11, width: 22, height: 22, class: 'tile-stroke', rx: 2 }));
+    g.appendChild(svg('text', { x: cx, y: cy + 1, class: labelC, 'font-size': '12' }, String(tile.params.linkId | 0)));
+    g.appendChild(svg('text', { x: cx, y: cy + 16, class: labelC, 'font-size': '11' }, lab));
   } else if (tile.kind === 'MEMBRANE') {
     g.appendChild(svg('line', {
       x1: cx, y1: 5, x2: cx, y2: cp - 5,
@@ -1479,25 +1442,9 @@ function drawTileG(tile, ghost) {
       'stroke-width': 2.5,
     }));
     g.appendChild(drawArrow(cx + tip - 6, cy, cx, cy, arrowC));
-    g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
-  } else if (tile.kind === 'BEAM_SHAPER') {
-    const slit = svg('g', null);
-    slit.appendChild(svg('rect', { x: cx - 22, y: cy - 3.5, width: 44, height: 7, class: 'tile-stroke' }));
-    g.appendChild(slit);
-    g.appendChild(svg('text', { x: cx, y: cy + 16, class: labelC, 'font-size': '8' }, lab));
+    appendLabelUpright(g, tile, cx, cy + 18, labelC, 8, lab);
   } else if (tile.kind === 'RESONATOR') {
     g.appendChild(svg('path', { d: `M ${cx - 12} ${cy} Q ${cx} ${cy - 14} ${cx + 12} ${cy}`, class: 'tile-stroke', fill: 'none' }));
-    g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
-  } else if (tile.kind === 'COLLIMATOR') {
-    /** Orientation comes from the root `tileRootSvgTransform` only (avoid double rotation). */
-    const base = 0;
-    for (let i = 0; i < 4; i++) {
-      const a = (i / 4) * Math.PI * 2 + base;
-      g.appendChild(svg('line', {
-        x1: cx, y1: cy, x2: cx + Math.cos(a) * 14, y2: cy + Math.sin(a) * 14,
-        class: 'tile-stroke',
-      }));
-    }
     g.appendChild(svg('text', { x: cx, y: cy + 18, class: labelC, 'font-size': '8' }, lab));
   } else if (tile.kind === 'BUFFER') {
     g.appendChild(svg('rect', { x: cx - 12, y: cy - 10, width: 24, height: 20, class: 'tile-stroke' }));
@@ -1935,6 +1882,30 @@ function appendInspectorLabeledColors(body, labelText, hint, colorRowEl) {
   body.appendChild(wrap);
 }
 
+/**
+ * One row of inspector color swatches (SOURCE / GOAL / RECOLOR).
+ * @param {string[]} choiceIds
+ * @param {(id: string) => boolean} isActive
+ * @param {(id: string, sw: HTMLButtonElement) => void} styleSwatch
+ * @param {(id: string) => void} onPick — persist + re-render handled by caller inside this
+ */
+function buildInspectorSwatchRow(choiceIds, isActive, styleSwatch, onPick) {
+  const cr = document.createElement('div');
+  cr.className = 'color-row';
+  for (const id of choiceIds) {
+    const sw = document.createElement('button');
+    sw.type = 'button';
+    sw.className = 'swatch' + (isActive(id) ? ' active' : '');
+    styleSwatch(id, sw);
+    sw.onclick = (e) => {
+      e.stopPropagation();
+      onPick(id);
+    };
+    cr.appendChild(sw);
+  }
+  return cr;
+}
+
 function bindParamSlider(row, label, min, max, step, value, onChange, hint) {
   inspFieldSeq += 1;
   const wrap = document.createElement('div');
@@ -2088,27 +2059,26 @@ function renderTileInspector() {
       tile.params.spawnParticleEnergy = Math.max(1, v | 0);
       persistParams();
     }, inspHint('SOURCE', 'spawnParticleEnergy'));
-    const cr = document.createElement('div');
-    cr.className = 'color-row';
-    for (const c of COLOR_IDS) {
-      const sw = document.createElement('button');
-      sw.type = 'button';
-      sw.className = 'swatch' + (P.colorId === c ? ' active' : '');
-      sw.style.background = COLOR_HEX[c];
-      sw.title = c;
-      sw.onclick = (e) => {
-        e.stopPropagation();
+    const cr = buildInspectorSwatchRow(
+      [...COLOR_IDS, 'random'],
+      c => (P.colorId ?? 'black') === c,
+      (c, sw) => {
+        if (c === 'random') {
+          styleSwatchRandomChannels(sw);
+          sw.title = 'random (per spawn)';
+        } else {
+          sw.style.background = COLOR_HEX[c];
+          sw.title = c;
+        }
+      },
+      (c) => {
         tile.params.colorId = c;
         persistParams();
         inspectorDomSig = '';
         APP.render();
-      };
-      cr.appendChild(sw);
-    }
+      },
+    );
     appendInspectorLabeledColors(body, 'spawn color', inspHint('SOURCE', 'spawnColor'), cr);
-  } else if (tile.kind === 'FOCUS') {
-    bindParamSlider(body, 'strength', 0.2, 12, 0.2, P.strength, v => { tile.params.strength = v; persistParams(); }, inspHint('FOCUS', 'strength'));
-    bindParamSlider(body, 'pull applies p', 0.5, 0.999, 0.01, P.hitP ?? 0.9, v => { tile.params.hitP = v; persistParams(); }, inspHint('FOCUS', 'hitP'));
   } else if (tile.kind === 'DIFFUSER') {
     bindParamSlider(body, 'spread °', 0, 70, 1, P.spreadDeg, v => { tile.params.spreadDeg = v; persistParams(); }, inspHint('DIFFUSER', 'spreadDeg'));
     bindParamSlider(body, 'spike chance', 0, 0.3, 0.02, P.spikeP ?? 0.09, v => { tile.params.spikeP = v; persistParams(); }, inspHint('DIFFUSER', 'spikeP'));
@@ -2121,39 +2091,62 @@ function renderTileInspector() {
   } else if (tile.kind === 'GOAL') {
     bindParamSlider(body, 'capture p', 0.5, 0.999, 0.01, P.captureP ?? 0.93, v => { tile.params.captureP = v; persistParams(); }, inspHint('GOAL', 'captureP'));
     bindParamSlider(body, 'capacity (0=∞)', 0, 500, 1, P.capacity | 0, v => { tile.params.capacity = v | 0; persistParams(); }, inspHint('GOAL', 'capacity'));
-    const cr = document.createElement('div');
-    cr.className = 'color-row';
-    const opts = ['any', ...COLOR_IDS];
-    for (const c of opts) {
-      const sw = document.createElement('button');
-      sw.type = 'button';
-      sw.className = 'swatch' + ((P.filterColor || 'any') === c ? ' active' : '');
-      sw.style.background = c === 'any' ? '#eee' : COLOR_HEX[c];
-      sw.textContent = c === 'any' ? '∗' : '';
-      sw.title = c;
-      sw.onclick = (e) => {
-        e.stopPropagation();
+    const cr = buildInspectorSwatchRow(
+      [...COLOR_IDS, 'any'],
+      c => (P.filterColor || 'any') === c,
+      (c, sw) => {
+        if (c === 'any') {
+          sw.style.background = '#eee';
+          sw.textContent = '∗';
+          sw.title = 'ANY — accept all channels';
+        } else {
+          sw.style.background = COLOR_HEX[c];
+          sw.textContent = '';
+          sw.title = c;
+        }
+      },
+      (c) => {
         tile.params.filterColor = c;
         persistParams();
         inspectorDomSig = '';
         APP.render();
-      };
-      cr.appendChild(sw);
-    }
+      },
+    );
     appendInspectorLabeledColors(body, 'catch filter', inspHint('GOAL', 'catchFilter'), cr);
   } else if (tile.kind === 'SPLITTER') {
     bindParamSlider(body, 'split chance', 0, 1, 0.05, P.splitP, v => { tile.params.splitP = v; persistParams(); }, inspHint('SPLITTER', 'splitP'));
     bindParamSlider(body, 'child speed ×', 0.3, 1, 0.02, P.childSpeed, v => { tile.params.childSpeed = v; persistParams(); }, inspHint('SPLITTER', 'childSpeed'));
+    bindParamSlider(body, 'split angle °', 0, 85, 1, P.splitAngleDeg ?? 30, v => { tile.params.splitAngleDeg = v; persistParams(); }, inspHint('SPLITTER', 'splitAngleDeg'));
     bindParamSlider(body, 'angle jitter °', 0, 12, 0.5, P.angleJitterDeg ?? 3, v => { tile.params.angleJitterDeg = v; persistParams(); }, inspHint('SPLITTER', 'angleJitterDeg'));
   } else if (tile.kind === 'RECOLOR') {
     bindParamSlider(body, 'recolor rate', 0.5, 30, 0.5, P.recolorRate, v => { tile.params.recolorRate = v; persistParams(); }, inspHint('RECOLOR', 'recolorRate'));
     bindParamSlider(body, 'quiet frames p', 0, 0.25, 0.02, P.skipP ?? 0.06, v => { tile.params.skipP = v; persistParams(); }, inspHint('RECOLOR', 'skipP'));
-  } else if (tile.kind === 'SPEED_GATE') {
-    bindParamSlider(body, '∥ gain', 0.2, 2.5, 0.05, P.parallelGain, v => { tile.params.parallelGain = v; persistParams(); }, inspHint('SPEED_GATE', 'parallelGain'));
-    bindParamSlider(body, '⊥ gain', 0.2, 2.5, 0.05, P.tangentialGain, v => { tile.params.tangentialGain = v; persistParams(); }, inspHint('SPEED_GATE', 'tangentialGain'));
-    bindParamSlider(body, 'gate applies p', 0.4, 0.999, 0.02, P.engageP ?? 0.88, v => { tile.params.engageP = v; persistParams(); }, inspHint('SPEED_GATE', 'engageP'));
+    const cr = buildInspectorSwatchRow(
+      [...COLOR_IDS, 'random'],
+      c => (P.assignColorId ?? 'red') === c,
+      (c, sw) => {
+        if (c === 'random') {
+          styleSwatchRandomChannels(sw);
+          sw.title = 'random (per tick that fires)';
+        } else {
+          sw.style.background = COLOR_HEX[c];
+          sw.title = c;
+        }
+      },
+      (c) => {
+        tile.params.assignColorId = c;
+        persistParams();
+        inspectorDomSig = '';
+        APP.render();
+      },
+    );
+    appendInspectorLabeledColors(body, 'assign color', inspHint('RECOLOR', 'assignColorId'), cr);
+  } else if (tile.kind === 'VELOCITY') {
+    bindParamSlider(body, '∥ gain (aim)', 0.05, 2.5, 0.05, P.parallelGain, v => { tile.params.parallelGain = v; persistParams(); }, inspHint('VELOCITY', 'parallelGain'));
+    bindParamSlider(body, '⊥ gain', 0.05, 2.5, 0.05, P.tangentialGain, v => { tile.params.tangentialGain = v; persistParams(); }, inspHint('VELOCITY', 'tangentialGain'));
+    bindParamSlider(body, 'applies p', 0.4, 0.999, 0.02, P.engageP ?? 0.88, v => { tile.params.engageP = v; persistParams(); }, inspHint('VELOCITY', 'engageP'));
   } else if (tile.kind === 'SWIRL') {
-    bindParamSlider(body, 'omega', 20, 500, 10, P.omega, v => { tile.params.omega = v; persistParams(); }, inspHint('SWIRL', 'omega'));
+    bindParamSlider(body, 'omega', 20, 900, 10, P.omega, v => { tile.params.omega = v; persistParams(); }, inspHint('SWIRL', 'omega'));
     bindParamSlider(body, 'decay', 0.2, 6, 0.1, P.decay, v => { tile.params.decay = v; persistParams(); }, inspHint('SWIRL', 'decay'));
     bindParamSlider(body, 'ω jitter', 0, 0.4, 0.02, P.omegaJitter ?? 0.14, v => { tile.params.omegaJitter = v; persistParams(); }, inspHint('SWIRL', 'omegaJitter'));
   } else if (tile.kind === 'TELEPORT') {
@@ -2164,44 +2157,10 @@ function renderTileInspector() {
   } else if (tile.kind === 'MEMBRANE') {
     bindParamSlider(body, 'leak p', 0, 1, 0.02, P.leakP, v => { tile.params.leakP = v; persistParams(); }, inspHint('MEMBRANE', 'leakP'));
     bindParamSlider(body, 'leak wobble', 0, 0.28, 0.02, P.wobbleP ?? 0.06, v => { tile.params.wobbleP = v; persistParams(); }, inspHint('MEMBRANE', 'wobbleP'));
-  } else if (tile.kind === 'BEAM_SHAPER') {
-    bindParamSlider(body, 'slit width', 0.06, 0.45, 0.01, P.slitW, v => { tile.params.slitW = v; persistParams(); }, inspHint('BEAM_SHAPER', 'slitW'));
-    bindParamSlider(body, 'slit offset', -0.35, 0.35, 0.02, P.slitOffset, v => { tile.params.slitOffset = v; persistParams(); }, inspHint('BEAM_SHAPER', 'slitOffset'));
-    bindParamSlider(body, 'edge soft', 0, 0.2, 0.01, P.edgeSoft, v => { tile.params.edgeSoft = v; persistParams(); }, inspHint('BEAM_SHAPER', 'edgeSoft'));
-    bindParamSlider(body, 'absorb p (abs mode)', 0, 1, 0.05, P.absorbP, v => { tile.params.absorbP = v; persistParams(); }, inspHint('BEAM_SHAPER', 'absorbP'));
-    bindParamSlider(body, 'bounce skip p', 0, 0.35, 0.02, P.bounceSoftP ?? 0.12, v => { tile.params.bounceSoftP = v; persistParams(); }, inspHint('BEAM_SHAPER', 'bounceSoftP'));
-    inspFieldSeq += 1;
-    const row = document.createElement('div');
-    row.className = 'insp-select-row';
-    const lr = document.createElement('div');
-    lr.className = 'insp-label-row';
-    const selId = `insp-f-${inspFieldSeq}`;
-    const lab = document.createElement('label');
-    lab.setAttribute('for', selId);
-    lab.textContent = 'mode';
-    lr.appendChild(lab);
-    appendInspHintButton(lr, inspHint('BEAM_SHAPER', 'mode'));
-    const sel = document.createElement('select');
-    sel.id = selId;
-    for (const m of ['bounce', 'absorb']) {
-      const o = document.createElement('option');
-      o.value = m; o.textContent = m;
-      if (P.mode === m) o.selected = true;
-      sel.appendChild(o);
-    }
-    sel.onchange = () => { tile.params.mode = sel.value; persistParams(); };
-    row.appendChild(lr);
-    row.appendChild(sel);
-    body.appendChild(row);
   } else if (tile.kind === 'RESONATOR') {
     bindParamSlider(body, 'amplitude', 50, 900, 10, P.amplitude, v => { tile.params.amplitude = v; persistParams(); }, inspHint('RESONATOR', 'amplitude'));
     bindParamSlider(body, 'freq', 0.5, 10, 0.1, P.freq, v => { tile.params.freq = v; persistParams(); }, inspHint('RESONATOR', 'freq'));
     bindParamSlider(body, 'amp jitter', 0, 0.35, 0.02, P.ampJitter ?? 0.14, v => { tile.params.ampJitter = v; persistParams(); }, inspHint('RESONATOR', 'ampJitter'));
-  } else if (tile.kind === 'COLLIMATOR') {
-    bindParamSlider(body, 'divisions', 2, 24, 1, P.divisions | 0, v => { tile.params.divisions = v | 0; persistParams(); }, inspHint('COLLIMATOR', 'divisions'));
-    bindParamSlider(body, 'snap chance', 0, 1, 0.05, P.snapP, v => { tile.params.snapP = v; persistParams(); }, inspHint('COLLIMATOR', 'snapP'));
-    bindParamSlider(body, 'jitter °', 0, 25, 1, P.jitterDeg, v => { tile.params.jitterDeg = v; persistParams(); }, inspHint('COLLIMATOR', 'jitterDeg'));
-    bindParamSlider(body, 'post-snap micro °', 0, 5, 0.1, P.microJitterDeg ?? 1.2, v => { tile.params.microJitterDeg = v; persistParams(); }, inspHint('COLLIMATOR', 'microJitterDeg'));
   } else if (tile.kind === 'BUFFER') {
     bindParamSlider(body, 'max hold', 1, 200, 1, P.maxK | 0, v => { tile.params.maxK = v | 0; persistParams(); }, inspHint('BUFFER', 'maxK'));
     bindParamSlider(body, 'release / sec', 0.5, 80, 0.5, P.releaseRate, v => { tile.params.releaseRate = v; persistParams(); }, inspHint('BUFFER', 'releaseRate'));
@@ -2423,11 +2382,17 @@ function equipmentSummary(state) {
   for (const t of state.tiles.values()) {
     c.set(t.kind, (c.get(t.kind) || 0) + 1);
   }
-  const order = ['SOURCE', 'GOAL', 'BUFFER', 'TELEPORT', 'SPLITTER', 'ABSORBER', 'REFLECTOR'];
   const parts = [];
-  for (const k of order) {
+  const seen = new Set();
+  for (const k of state.level.palette) {
     const n = c.get(k) || 0;
-    if (n) parts.push(`${KIND_META[k]?.label ?? k}×${n}`);
+    if (n) {
+      parts.push(`${KIND_META[k]?.label ?? k}×${n}`);
+      seen.add(k);
+    }
+  }
+  for (const [k, n] of c) {
+    if (!seen.has(k) && n) parts.push(`${KIND_META[k]?.label ?? k}×${n}`);
   }
   return parts.length ? parts.join(' · ') : '—';
 }
@@ -2615,8 +2580,6 @@ function renderHUD() {
     ['absorber', String(rs.absorber)],
     ['goal catches', String(rs.goalCatch)],
     ['reflector (enter)', String(rs.reflectorHit)],
-    ['beam bounce', String(rs.beamBounce)],
-    ['beam slit kill', String(rs.beamSlitKill)],
     ['edge cull', String(rs.edgeCull)],
   ];
   const rowHtml = (a, rowClass = '') => a.map(([k, v]) =>
