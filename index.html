@@ -36,12 +36,7 @@
     </main>
 
     <aside class="sidebar sidebar-right">
-      <div class="sidebar-title">TILE</div>
       <div id="tile-inspector" class="tile-inspector"></div>
-      <div class="sidebar-title">GOALS</div>
-      <div id="task" class="task-panel"></div>
-      <div class="sidebar-title">STATS</div>
-      <div id="stats" class="stats-panel"></div>
     </aside>
 
     <footer class="bottombar">
@@ -57,6 +52,14 @@
         <button type="button" class="spd-btn" data-speed="10">×10</button>
         <button type="button" class="spd-btn" data-speed="100">×100</button>
       </span>
+      <div class="score-pop-wrap" title="Simulation stats (hover or focus)">
+        <button type="button" class="score-pop-icon" aria-label="Simulation stats" aria-controls="stats">
+          <svg class="score-pop-glyph" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+            <path fill="currentColor" d="M2 14h2V8H2v6zm5 0h2V4H7v10zm5 0h2v-8h-2v8z"/>
+          </svg>
+        </button>
+        <div id="stats" class="stats-panel score-pop-panel" role="region" aria-label="Simulation stats"></div>
+      </div>
     </footer>
   </div>
 

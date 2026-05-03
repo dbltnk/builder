@@ -125,7 +125,19 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   overflow-y: auto;
 }
 .sidebar-left { grid-area: lsb; border-top: none; border-bottom: none; border-left: none; }
-.sidebar-right { grid-area: rsb; border-top: none; border-bottom: none; border-right: none; }
+.sidebar-right {
+  grid-area: rsb;
+  border-top: none;
+  border-bottom: none;
+  border-right: none;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.sidebar-right.sidebar-right--tile-selected {
+  box-shadow: inset 4px 0 0 var(--fg);
+}
 
 .sidebar-title {
   font-size: 11px;
@@ -158,6 +170,8 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   justify-content: center;
   gap: 12px;
   padding: 0 16px;
+  position: relative;
+  overflow: visible;
 }
 
 .ctl-btn { min-width: 72px; }
@@ -211,6 +225,7 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 .palette-entry.active {
   background: var(--fg);
   color: var(--bg);
+  box-shadow: inset 5px 0 0 var(--bg);
 }
 .palette-entry.active .pe-hotkey {
   background: var(--fg);
@@ -301,11 +316,112 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   color: var(--grey-3);
 }
 
+.stats-panel .stats-goals {
+  margin-bottom: 8px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--grey-2);
+  color: var(--grey-4);
+}
+
+.stats-panel .stats-goals-title {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--grey-3);
+  margin: 0 0 6px;
+  text-align: left;
+}
+
+.stats-panel .stats-goals .sp-row {
+  margin-bottom: 3px;
+}
+
+.stats-panel .stats-goals .sp-row:last-child {
+  margin-bottom: 0;
+}
+
+/* ---------- Stats popup (inside bottom bar, right) ---------- */
+
+.bottombar .score-pop-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  margin-left: auto;
+  flex-shrink: 0;
+  align-self: stretch;
+  z-index: 20;
+}
+
+.score-pop-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: default;
+}
+
+.score-pop-icon:hover,
+.score-pop-icon:focus-visible {
+  background: var(--fg);
+  color: var(--bg);
+}
+
+.score-pop-icon:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}
+
+.score-pop-glyph {
+  display: block;
+}
+
+.score-pop-panel {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  margin-bottom: 1px;
+  min-width: min(280px, calc(100vw - 24px));
+  max-width: min(320px, calc(100vw - 24px));
+  max-height: min(72vh, 520px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 12px 12px 10px;
+  border: 1px solid var(--fg);
+  background: var(--bg);
+  box-shadow: 0 4px 0 rgba(0, 0, 0, 0.08);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.12s ease, visibility 0.12s ease;
+  z-index: 50;
+}
+
+.score-pop-wrap:hover .score-pop-panel,
+.score-pop-wrap:focus-within .score-pop-panel {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
 /* ---------- Board / SVG ---------- */
 
 .tile-frame { fill: var(--bg); stroke: var(--fg); stroke-width: 1.5; }
 .tile-frame.fixed { stroke-dasharray: 3 2; }
 .tile-frame.inspector-target { stroke-width: 2.5; }
+
+#layer-tiles g.board-tile-selected .tile-frame {
+  stroke-width: 3.1;
+}
+#layer-tiles g.board-tile-selected .tile-frame.inspector-target {
+  stroke-width: 3.45;
+}
 .tile-arrow { fill: var(--fg); stroke: none; }
 .tile-label {
   font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
@@ -430,66 +546,176 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 
 .tile-inspector {
   font-size: 11px;
-  line-height: 1.45;
-  max-height: min(42vh, 360px);
+  line-height: 1.35;
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
   padding-right: 2px;
+}
+
+.tile-inspector .insp-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+.tile-inspector .insp-label-row label {
+  flex: 1;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.tile-inspector .insp-hint {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--grey-3);
+  background: var(--bg);
+  color: var(--grey-4);
+  cursor: help;
+}
+
+.tile-inspector .insp-hint:hover,
+.tile-inspector .insp-hint:focus-visible {
+  border-color: var(--fg);
+  color: var(--fg);
+}
+
+.tile-inspector .insp-hint-svg {
+  display: block;
+  pointer-events: none;
+}
+
+.tile-inspector .insp-color-label {
+  font-size: 9px;
+  color: var(--grey-3);
+  letter-spacing: 0.06em;
+  text-transform: lowercase;
+}
+
+.tile-inspector .insp-row--colors .color-row {
+  margin-top: 2px;
+}
+
+.tile-inspector .insp-select-row > .insp-label-row {
   margin-bottom: 4px;
 }
 
-.tile-inspector .inspector-empty {
-  color: var(--grey-3);
-  letter-spacing: 0.08em;
-  padding: 8px 0 12px;
+.tile-inspector .inspector-header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  padding-bottom: 6px;
+  border-bottom: 2px solid var(--fg);
 }
 
 .tile-inspector .inspector-header {
   font-size: 11px;
   letter-spacing: 0.12em;
-  margin-bottom: 8px;
-  padding-bottom: 6px;
-  border-bottom: 1px solid var(--grey-1);
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: none;
+  flex: 1;
+  min-width: 0;
 }
 
-.tile-inspector .inspector-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-bottom: 10px;
+.tile-inspector .inspector-sel-pill {
+  flex: 0 0 auto;
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border: 1px solid var(--fg);
+  background: var(--fg);
+  color: var(--bg);
+  line-height: 1.2;
+  margin-top: 1px;
 }
-.tile-inspector .inspector-actions button {
-  padding: 4px 10px;
-  font-size: 11px;
+
+.tile-inspector .insp-kind-help {
+  font-size: 10px;
+  line-height: 1.38;
+  color: var(--grey-4);
+  margin-bottom: 6px;
+}
+
+.tile-inspector .insp-tail-stats {
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--grey-4);
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--grey-1);
+}
+
+.tile-inspector .insp-stats-label {
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--grey-3);
+  margin-bottom: 4px;
+}
+
+.tile-inspector .insp-tail-stats .pkd-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+
+.tile-inspector .insp-tail-stats .pkd-row span:first-child {
+  color: var(--grey-3);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+
+.tile-inspector .insp-tail-stats .pkd-row b {
+  font-weight: normal;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg);
+  text-align: right;
+  font-size: 10px;
 }
 
 .tile-inspector .insp-row {
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  margin-bottom: 8px;
+  gap: 0;
+  margin-bottom: 4px;
 }
 .tile-inspector .insp-row label {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--grey-3);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
 }
 .tile-inspector input[type="range"] {
   width: 100%;
 }
 .tile-inspector .insp-val {
-  font-size: 11px;
+  font-size: 10px;
   font-variant-numeric: tabular-nums;
 }
 
 .tile-inspector .color-row {
   display: flex;
-  gap: 4px;
+  gap: 3px;
   flex-wrap: wrap;
-  margin-top: 4px;
+  margin-top: 2px;
+  margin-bottom: 2px;
 }
 .tile-inspector .swatch {
-  width: 22px;
-  height: 22px;
+  width: 18px;
+  height: 18px;
   border: 1px solid var(--fg);
   cursor: pointer;
   padding: 0;
@@ -502,17 +728,17 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
 .tile-inspector .insp-select-row {
   display: flex;
   flex-direction: column;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: 2px;
+  margin-bottom: 4px;
 }
 .tile-inspector .insp-select-row label {
-  font-size: 10px;
+  font-size: 9px;
   color: var(--grey-3);
 }
 .tile-inspector .insp-select-row select {
   font-family: inherit;
-  font-size: 11px;
-  padding: 4px;
+  font-size: 10px;
+  padding: 3px 4px;
   border: 1px solid var(--fg);
   background: var(--bg);
   color: var(--fg);

@@ -106,9 +106,9 @@ const SANDBOX = {
   gridH: 18,
   cellPx: 36,
   palette: [
-    'SOURCE', 'FOCUS', 'DIFFUSER', 'REFLECTOR', 'ABSORBER', 'GOAL',
-    'SPLITTER', 'RECOLOR', 'SPEED_GATE', 'SWIRL', 'TELEPORT', 'MEMBRANE',
-    'BEAM_SHAPER', 'RESONATOR', 'COLLIMATOR', 'BUFFER',
+    'GOAL', 'SOURCE', 'SPEED_GATE', 'RECOLOR', 'ABSORBER', 'BUFFER',
+    'REFLECTOR', 'MEMBRANE', 'DIFFUSER', 'TELEPORT', 'RESONATOR', 'SWIRL',
+    'FOCUS', 'SPLITTER', 'BEAM_SHAPER', 'COLLIMATOR',
   ],
 };
 
@@ -420,6 +420,157 @@ const KIND_META = {
   RESONATOR: { label: 'RSN' },
   COLLIMATOR: { label: 'COL' },
   BUFFER: { label: 'BUF' },
+};
+
+/**
+ * Player-facing: what the tile is for in a build, and the main rule for how it acts.
+ * Used at the top of each palette row and in the kind-details panel.
+ */
+const KIND_PLAYER_HELP = {
+  SOURCE:
+    'Adds particles. Fires on a timer into the aim direction; tune rate, spray, speeds, color, and optional total spawn budget.',
+  FOCUS:
+    'Bends trajectories. While crossing, pulls motion toward the center; strength scales with how “through” the tile you are, with a miss chance.',
+  DIFFUSER:
+    'Adds noise. On each crossing it re-rolls exit angle inside a cone; rarely throws a much wider “spike” turn.',
+  REFLECTOR:
+    'Redirects motion. Mostly a tight bounce off the face, but sometimes applies a wider random scatter instead.',
+  ABSORBER:
+    'Deletes particles by attrition. Every tick inside it shaves energy by chance; at zero energy the particle is removed.',
+  GOAL:
+    'Scores catches. Grabs particles that match its color filter (or any); optional capacity caps how many count.',
+  SPLITTER:
+    'Multiplies flow. On a hit, can duplicate into two particles (child is slower); angle gets a small jitter.',
+  RECOLOR:
+    'Shuffles identity. While overlapping, periodically reassigns glyph and color so streams mix.',
+  SPEED_GATE:
+    'Shapes speed. Boosts motion along the tile’s aim axis vs sideways—fast lane vs slow lane depending on approach.',
+  SWIRL:
+    'Curves paths. Applies twist around the tile while inside; strength falls off with distance from the center.',
+  TELEPORT:
+    'Moves position. Match link IDs in pairs; entering one exits the other aiming within a cone (can misfire).',
+  MEMBRANE:
+    'Leaky wall. Mostly blocks, but some crossings leak straight through or wobble along the slit instead of reflecting.',
+  BEAM_SHAPER:
+    'Collimates beams. A narrow slit either bounces or absorbs by chance; very grazing hits can be killed.',
+  RESONATOR:
+    'Pumps rhythm. While in range, adds an in/out radial shove that oscillates—timing matters for how you cross.',
+  COLLIMATOR:
+    'Quantizes direction. Snaps velocity toward a few fixed spokes around the circle so motion locks to lanes.',
+  BUFFER:
+    'Queues particles. Holds up to maxK inside the tile, then releases at a set rate (optional burst when full).',
+};
+
+/** Tile-inspector control explanations (hover the ⓘ next to each label). */
+const INSPECTOR_PARAM_HINTS = {
+  ALL: {
+    energyDrain:
+      'Each tick while a particle overlaps this tile, this much energy is removed. At zero energy the particle is deleted. SOURCE tiles do not use this.',
+  },
+  SOURCE: {
+    rate: 'How many particles this source tries to spawn per second on average (timing noise still jitters the clock).',
+    speedMin: 'Minimum launch speed for new particles (simulation units per second).',
+    speedMax: 'Maximum launch speed; each spawn picks uniformly between min and max.',
+    sprayDeg: 'Half-angle of the spray cone: new velocity is aimed at a random bearing within ±this many degrees of the tile forward axis.',
+    timingNoise: 'Randomizes when the next spawn fires so identical sources do not pulse in perfect sync.',
+    burst: 'Adds a slow wandering offset to aim between spawns so the stream gently steers over time.',
+    energyBudget: 'Total energy budget for spawning; at 0 the source never runs out. When spent, this source stops creating particles.',
+    spawnParticleEnergy: 'Energy each newborn particle starts with (affects how long it survives under drain elsewhere).',
+    spawnColor: 'Color channel for new particles; used by goals, filters, and recolor logic.',
+  },
+  FOCUS: {
+    strength: 'How hard passing particles are pulled toward this tile’s center while overlapping.',
+    hitP: 'Per tick, probability the pull actually runs; lower values let more particles “skip” being bent.',
+  },
+  DIFFUSER: {
+    spreadDeg: 'Half-width of the cone used to re-roll direction when a particle crosses.',
+    spikeP: 'Chance to use a much wider one-off angle instead of the normal cone—spiky exits.',
+  },
+  REFLECTOR: {
+    scatterP: 'Each bounce, probability to use a wide random scatter instead of a near-specular reflection.',
+    scatterDeg: 'When scatter triggers, how wide the random deflection can be (degrees).',
+  },
+  ABSORBER: {
+    absorbP: 'Per tick while overlapping, chance to apply an energy bite scaled by the sim timestep.',
+    absorbJitter: 'Randomizes absorb strength so identical particles do not decay identically.',
+  },
+  GOAL: {
+    captureP: 'Per tick while overlapping a matching particle, chance to register a catch toward this goal’s score.',
+    capacity: 'Maximum catches this goal will count; 0 means unlimited.',
+    catchFilter: 'Which particle color counts as a catch; “any” accepts all channels.',
+  },
+  SPLITTER: {
+    splitP: 'On interaction, chance to duplicate the particle into an extra child.',
+    childSpeed: 'Speed multiplier applied to the child particle relative to the parent.',
+    angleJitterDeg: 'Random ±degrees added to the child’s exit direction.',
+  },
+  RECOLOR: {
+    recolorRate: 'How often (per second) this tile tries to assign a new random glyph/color to overlapping particles.',
+    skipP: 'Chance each tick to skip recoloring so streams do not strobe every frame.',
+  },
+  SPEED_GATE: {
+    parallelGain: 'Multiplier applied to velocity along the tile’s forward axis when the gate engages.',
+    tangentialGain: 'Multiplier applied to velocity perpendicular to the forward axis.',
+    engageP: 'Per tick, probability the speed gate actually applies its parallel / perpendicular boosts.',
+  },
+  SWIRL: {
+    omega: 'Angular “spin” strength applied to velocity while inside (higher = tighter curving).',
+    decay: 'How quickly swirl influence falls off with distance from the tile center.',
+    omegaJitter: 'Randomizes effective spin strength tick to tick.',
+  },
+  TELEPORT: {
+    linkId: 'Portals with the same link id are paired; exiting one sends you to the other.',
+    malfunctionP: 'Chance a teleport attempt fails and the particle is not moved.',
+    coneDeg: 'After a successful teleport, new aim is picked uniformly within this half-cone around the exit forward axis.',
+    exitJitterDeg: 'Extra small random angle added on top of the cone draw.',
+  },
+  MEMBRANE: {
+    leakP: 'Chance per crossing that the particle slips straight through instead of interacting with the barrier.',
+    wobbleP: 'Chance to skim along the membrane with a perturbed path instead of a clean reflect or leak.',
+  },
+  BEAM_SHAPER: {
+    slitW: 'Width of the slit aperture as a fraction of the tile (narrower = stricter beams).',
+    slitOffset: 'Shifts the slit sideways relative to the tile center (signed fraction).',
+    edgeSoft: 'Softens the slit edges so transitions are gradual instead of hard clipping.',
+    absorbP: 'In absorb mode, per-hit chance the particle is absorbed instead of reflected.',
+    bounceSoftP: 'In bounce mode, chance to skip a perfect bounce and use a softer response.',
+    mode: 'bounce: particles are redirected by the slit. absorb: they may be removed by absorb probability instead.',
+  },
+  RESONATOR: {
+    amplitude: 'Peak strength of the oscillating radial push/pull while particles are in range.',
+    freq: 'Oscillation frequency in Hz-ish units—how fast the shove reverses.',
+    ampJitter: 'Randomizes amplitude per tick so the wave is not perfectly periodic.',
+  },
+  COLLIMATOR: {
+    divisions: 'How many equally spaced direction spokes the velocity can snap to around the circle.',
+    snapP: 'Chance on overlap that velocity is snapped toward the nearest spoke direction.',
+    jitterDeg: 'Random angular error added before snapping.',
+    microJitterDeg: 'Tiny extra wobble applied after a snap so motion is not perfectly rigid.',
+  },
+  BUFFER: {
+    maxK: 'Maximum number of particles this buffer can hold at once.',
+    releaseRate: 'How many buffered particles per second are released back to the board on average.',
+    slipP: 'Chance an incoming particle bypasses the buffer instead of entering the queue.',
+    burstOnFull: 'Non-zero enables an extra release burst when the buffer hits max hold; 0 uses steady release only.',
+  },
+};
+
+function inspHint(kind, key) {
+  const m = INSPECTOR_PARAM_HINTS[kind];
+  if (m && m[key]) return m[key];
+  return INSPECTOR_PARAM_HINTS.ALL[key] || '';
+}
+
+/** Run counters (since last particle reset) most relevant to each kind. */
+const KIND_RUN_ROWS = {
+  SOURCE: [['spawns', 'spawnSource']],
+  BUFFER: [['buffer in', 'bufferIn'], ['buffer out', 'bufferOut']],
+  GOAL: [['goal catch', 'goalCatch']],
+  SPLITTER: [['split births', 'splitBirths']],
+  TELEPORT: [['teleports', 'teleports']],
+  ABSORBER: [['absorbed', 'absorber']],
+  REFLECTOR: [['reflect hits', 'reflectorHit']],
+  BEAM_SHAPER: [['beam bounce', 'beamBounce'], ['slit kills', 'beamSlitKill']],
 };
 
 /** Nominal material cost per tile kind (Zachtronics-style “optimize cost”). */
@@ -1593,7 +1744,10 @@ function renderBoardSvg(state, host) {
     const root = drawTileG(tile, false);
     root.setAttribute('transform', tileRootSvgTransform(tile, cp, innerDesign));
     root.setAttribute('data-tile-id', String(tile.id));
-    if (hoverTileId === tile.id) root.setAttribute('class', 'board-tile-hover');
+    const rootClasses = [];
+    if (hoverTileId === tile.id) rootClasses.push('board-tile-hover');
+    if (state.ui.inspectorTileId === tile.id) rootClasses.push('board-tile-selected');
+    if (rootClasses.length) root.setAttribute('class', rootClasses.join(' '));
     if (state.ui.inspectorTileId === tile.id) {
       const fr = root.querySelector('.tile-frame, .ghost-frame');
       if (fr) fr.classList.add('inspector-target');
@@ -1748,15 +1902,54 @@ function redoBoard(state) {
 
 /* ---------- Popover params ---------- */
 
-function bindParamSlider(row, label, min, max, step, value, onChange) {
+let inspFieldSeq = 0;
+
+function appendInspHintButton(container, hintText) {
+  if (!hintText) return;
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'insp-hint';
+  b.title = hintText;
+  b.setAttribute('aria-label', hintText);
+  b.innerHTML = '<svg class="insp-hint-svg" width="11" height="11" viewBox="0 0 11 11" aria-hidden="true"><circle cx="5.5" cy="5.5" r="4.75" fill="none" stroke="currentColor" stroke-width="1"/><circle cx="5.5" cy="3.15" r="0.85" fill="currentColor"/><path d="M5.5 4.9v3.35" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" fill="none"/></svg>';
+  b.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  container.appendChild(b);
+}
+
+/** Label row + swatch strip (SOURCE color, GOAL filter, etc.). */
+function appendInspectorLabeledColors(body, labelText, hint, colorRowEl) {
+  const wrap = document.createElement('div');
+  wrap.className = 'insp-row insp-row--colors';
+  const labelRow = document.createElement('div');
+  labelRow.className = 'insp-label-row';
+  const lab = document.createElement('span');
+  lab.className = 'insp-color-label';
+  lab.textContent = labelText;
+  labelRow.appendChild(lab);
+  appendInspHintButton(labelRow, hint);
+  wrap.appendChild(labelRow);
+  wrap.appendChild(colorRowEl);
+  body.appendChild(wrap);
+}
+
+function bindParamSlider(row, label, min, max, step, value, onChange, hint) {
+  inspFieldSeq += 1;
   const wrap = document.createElement('div');
   wrap.className = 'insp-row';
+  const labelRow = document.createElement('div');
+  labelRow.className = 'insp-label-row';
   const lb = document.createElement('label');
   lb.textContent = label;
+  const fid = `insp-f-${inspFieldSeq}`;
+  lb.setAttribute('for', fid);
   const val = document.createElement('div');
   val.className = 'insp-val';
   const input = document.createElement('input');
   input.type = 'range';
+  input.id = fid;
   input.min = String(min);
   input.max = String(max);
   input.step = String(step);
@@ -1767,7 +1960,9 @@ function bindParamSlider(row, label, min, max, step, value, onChange) {
   };
   input.addEventListener('input', sync);
   val.textContent = input.value;
-  wrap.appendChild(lb);
+  labelRow.appendChild(lb);
+  appendInspHintButton(labelRow, hint);
+  wrap.appendChild(labelRow);
   wrap.appendChild(input);
   wrap.appendChild(val);
   row.appendChild(wrap);
@@ -1785,10 +1980,40 @@ function clearInspector() {
   APP.state.ui.inspectorTileId = null;
   APP.state.ui.gizmoHud = null;
   inspectorDomSig = '';
+  document.querySelector('.sidebar-right')?.classList.remove('sidebar-right--tile-selected');
   const host = document.getElementById('tile-inspector');
-  if (host) {
-    host.innerHTML = '<div class="inspector-empty">click a tile</div>';
+  if (host) host.innerHTML = '';
+}
+
+/** Per-instance snapshot rows for the inspector tail (below sliders). */
+function collectTileInstanceStatPairs(tile) {
+  const r = [];
+  if (tile.kind === 'GOAL') {
+    r.push(['captured (this tile)', String(tile._captured | 0)]);
+    const cap = tile.params.capacity | 0;
+    r.push(['capacity (this tile)', cap > 0 ? String(cap) : '∞']);
+  } else if (tile.kind === 'BUFFER') {
+    const k = Math.max(1, tile.params.maxK | 0);
+    r.push(['queued (this tile)', `${(tile._buf || []).length}/${k}`]);
+  } else if (tile.kind === 'SOURCE') {
+    const b = tile.params.energyBudget | 0;
+    if (b > 0) {
+      const left = tile._energyLeft != null ? tile._energyLeft : b;
+      r.push(['emit budget (this)', `${((100 * left) / b).toFixed(0)}%`]);
+    } else {
+      r.push(['emit budget (this)', '∞']);
+    }
   }
+  return r;
+}
+
+function formatPairRowsHtml(pairs) {
+  return pairs.map(([k, v]) =>
+    `<div class="pkd-row"><span>${k}</span><b>${v}</b></div>`).join('');
+}
+
+function formatKindStatRowsHtml(state, kind) {
+  return formatPairRowsHtml(collectKindDetailStatPairs(state, kind));
 }
 
 function renderTileInspector() {
@@ -1800,66 +2025,45 @@ function renderTileInspector() {
   if (!tile) {
     if (id != null) APP.state.ui.inspectorTileId = null;
     inspectorDomSig = '';
-    host.innerHTML = '<div class="inspector-empty">click a tile</div>';
+    document.querySelector('.sidebar-right')?.classList.remove('sidebar-right--tile-selected');
+    host.innerHTML = '';
     return;
   }
 
-  const sig = `${tile.id}|${tile.x}|${tile.y}|${tile.rotationRad}|${tile.scale}|${tile.kind}|${JSON.stringify(tile.params)}`;
-  if (sig === inspectorDomSig && host.querySelector('.inspector-params')) return;
+  const instRows = collectTileInstanceStatPairs(tile);
+  const kindRows = collectKindDetailStatPairs(APP.state, tile.kind);
+  const liveSig = [...instRows, ...kindRows].map(([a, b]) => `${a}=${b}`).join('|');
+  const sig = `${tile.id}|${tile.x}|${tile.y}|${tile.rotationRad}|${tile.scale}|${tile.kind}|${JSON.stringify(tile.params)}|${liveSig}`;
+  if (sig === inspectorDomSig && host.querySelector('.inspector-params')) {
+    document.querySelector('.sidebar-right')?.classList.add('sidebar-right--tile-selected');
+    return;
+  }
   inspectorDomSig = sig;
 
   host.innerHTML = '';
+  document.querySelector('.sidebar-right')?.classList.add('sidebar-right--tile-selected');
 
+  const hdrRow = document.createElement('div');
+  hdrRow.className = 'inspector-header-row';
   const hdr = document.createElement('div');
   hdr.className = 'inspector-header';
   hdr.textContent = `${tile.kind}  ·  ${tile.x.toFixed(0)},${tile.y.toFixed(0)}`;
-  host.appendChild(hdr);
+  const pill = document.createElement('span');
+  pill.className = 'inspector-sel-pill';
+  pill.textContent = 'selected';
+  hdrRow.appendChild(hdr);
+  hdrRow.appendChild(pill);
+  host.appendChild(hdrRow);
 
-  const actions = document.createElement('div');
-  actions.className = 'inspector-actions';
-  const rotBtn = document.createElement('button');
-  rotBtn.type = 'button';
-  rotBtn.textContent = 'rotate 90°';
-  rotBtn.onclick = e => {
-    e.preventDefault();
-    withBoardEdit(APP.state, () => { rotateTile(APP.state, tile.id); return true; });
-    inspectorDomSig = '';
-    APP.render();
-  };
-  actions.appendChild(rotBtn);
-  const delBtn = document.createElement('button');
-  delBtn.type = 'button';
-  delBtn.textContent = 'remove';
-  delBtn.onclick = e => {
-    e.preventDefault();
-    withBoardEdit(APP.state, () => deleteTile(APP.state, tile.id));
-    clearInspector();
-    APP.render();
-  };
-  actions.appendChild(delBtn);
-  host.appendChild(actions);
+  const help = document.createElement('div');
+  help.className = 'insp-kind-help';
+  help.textContent = KIND_PLAYER_HELP[tile.kind] || '';
+  host.appendChild(help);
 
   const body = document.createElement('div');
   body.className = 'inspector-params';
+  inspFieldSeq = 0;
   const P = tile.params;
-
-  const persistTransform = () => {
-    Storage.saveBoard(snapshotBoard(APP.state));
-    invalidateAllParticleTileEntry(APP.state);
-  };
-
-  bindParamSlider(body, 'rotation °', -180, 180, 0.5, ((tile.rotationRad ?? 0) * 180) / Math.PI, v => {
-    tile.rotationRad = (v * Math.PI) / 180;
-    persistTransform();
-    inspectorDomSig = '';
-    APP.render();
-  });
-  bindParamSlider(body, 'scale', SCALE_MIN, SCALE_MAX, 0.05, tile.scale ?? 1, v => {
-    tile.scale = clamp(v, SCALE_MIN, SCALE_MAX);
-    persistTransform();
-    inspectorDomSig = '';
-    APP.render();
-  });
 
   const persistParams = () => {
     Storage.saveBoard(snapshotBoard(APP.state));
@@ -1867,23 +2071,23 @@ function renderTileInspector() {
   };
 
   if (tile.kind === 'SOURCE') {
-    bindParamSlider(body, 'rate / sec', 0, 600, 5, P.rate, v => { tile.params.rate = v; persistParams(); });
-    bindParamSlider(body, 'speed min', 20, 400, 5, P.speedMin, v => { tile.params.speedMin = v; persistParams(); });
-    bindParamSlider(body, 'speed max', 20, 500, 5, P.speedMax, v => { tile.params.speedMax = v; persistParams(); });
-    bindParamSlider(body, 'spray °', 0, 85, 1, P.sprayDeg, v => { tile.params.sprayDeg = v; persistParams(); });
-    bindParamSlider(body, 'timing noise', 0, 0.55, 0.02, P.timingNoise ?? 0.22, v => { tile.params.timingNoise = v; persistParams(); });
-    bindParamSlider(body, 'slow wander', 0, 0.45, 0.02, P.burst, v => { tile.params.burst = v; persistParams(); });
+    bindParamSlider(body, 'rate / sec', 0, 600, 5, P.rate, v => { tile.params.rate = v; persistParams(); }, inspHint('SOURCE', 'rate'));
+    bindParamSlider(body, 'speed min', 20, 400, 5, P.speedMin, v => { tile.params.speedMin = v; persistParams(); }, inspHint('SOURCE', 'speedMin'));
+    bindParamSlider(body, 'speed max', 20, 500, 5, P.speedMax, v => { tile.params.speedMax = v; persistParams(); }, inspHint('SOURCE', 'speedMax'));
+    bindParamSlider(body, 'spray °', 0, 85, 1, P.sprayDeg, v => { tile.params.sprayDeg = v; persistParams(); }, inspHint('SOURCE', 'sprayDeg'));
+    bindParamSlider(body, 'timing noise', 0, 0.55, 0.02, P.timingNoise ?? 0.22, v => { tile.params.timingNoise = v; persistParams(); }, inspHint('SOURCE', 'timingNoise'));
+    bindParamSlider(body, 'slow wander', 0, 0.45, 0.02, P.burst, v => { tile.params.burst = v; persistParams(); }, inspHint('SOURCE', 'burst'));
     bindParamSlider(body, 'emit energy (0=∞)', 0, 2e6, 2500, P.energyBudget ?? 0, v => {
       tile.params.energyBudget = v | 0;
       const cap = tile.params.energyBudget | 0;
       if (cap > 0) tile._energyLeft = cap;
       else delete tile._energyLeft;
       persistParams();
-    });
+    }, inspHint('SOURCE', 'energyBudget'));
     bindParamSlider(body, 'spawn particle energy', 1, 800, 1, P.spawnParticleEnergy ?? 100, v => {
       tile.params.spawnParticleEnergy = Math.max(1, v | 0);
       persistParams();
-    });
+    }, inspHint('SOURCE', 'spawnParticleEnergy'));
     const cr = document.createElement('div');
     cr.className = 'color-row';
     for (const c of COLOR_IDS) {
@@ -1901,22 +2105,22 @@ function renderTileInspector() {
       };
       cr.appendChild(sw);
     }
-    body.appendChild(cr);
+    appendInspectorLabeledColors(body, 'spawn color', inspHint('SOURCE', 'spawnColor'), cr);
   } else if (tile.kind === 'FOCUS') {
-    bindParamSlider(body, 'strength', 0.2, 12, 0.2, P.strength, v => { tile.params.strength = v; persistParams(); });
-    bindParamSlider(body, 'pull applies p', 0.5, 0.999, 0.01, P.hitP ?? 0.9, v => { tile.params.hitP = v; persistParams(); });
+    bindParamSlider(body, 'strength', 0.2, 12, 0.2, P.strength, v => { tile.params.strength = v; persistParams(); }, inspHint('FOCUS', 'strength'));
+    bindParamSlider(body, 'pull applies p', 0.5, 0.999, 0.01, P.hitP ?? 0.9, v => { tile.params.hitP = v; persistParams(); }, inspHint('FOCUS', 'hitP'));
   } else if (tile.kind === 'DIFFUSER') {
-    bindParamSlider(body, 'spread °', 0, 70, 1, P.spreadDeg, v => { tile.params.spreadDeg = v; persistParams(); });
-    bindParamSlider(body, 'spike chance', 0, 0.3, 0.02, P.spikeP ?? 0.09, v => { tile.params.spikeP = v; persistParams(); });
+    bindParamSlider(body, 'spread °', 0, 70, 1, P.spreadDeg, v => { tile.params.spreadDeg = v; persistParams(); }, inspHint('DIFFUSER', 'spreadDeg'));
+    bindParamSlider(body, 'spike chance', 0, 0.3, 0.02, P.spikeP ?? 0.09, v => { tile.params.spikeP = v; persistParams(); }, inspHint('DIFFUSER', 'spikeP'));
   } else if (tile.kind === 'REFLECTOR') {
-    bindParamSlider(body, 'scatter apply p', 0, 1, 0.02, P.scatterP ?? 0.72, v => { tile.params.scatterP = v; persistParams(); });
-    bindParamSlider(body, 'scatter °', 0, 18, 0.5, P.scatterDeg ?? 4, v => { tile.params.scatterDeg = v; persistParams(); });
+    bindParamSlider(body, 'scatter apply p', 0, 1, 0.02, P.scatterP ?? 0.72, v => { tile.params.scatterP = v; persistParams(); }, inspHint('REFLECTOR', 'scatterP'));
+    bindParamSlider(body, 'scatter °', 0, 18, 0.5, P.scatterDeg ?? 4, v => { tile.params.scatterDeg = v; persistParams(); }, inspHint('REFLECTOR', 'scatterDeg'));
   } else if (tile.kind === 'ABSORBER') {
-    bindParamSlider(body, 'absorb p (×dt)', 0.02, 1, 0.02, P.absorbP, v => { tile.params.absorbP = v; persistParams(); });
-    bindParamSlider(body, 'p jitter', 0, 0.45, 0.02, P.absorbJitter ?? 0.18, v => { tile.params.absorbJitter = v; persistParams(); });
+    bindParamSlider(body, 'absorb p (×dt)', 0.02, 1, 0.02, P.absorbP, v => { tile.params.absorbP = v; persistParams(); }, inspHint('ABSORBER', 'absorbP'));
+    bindParamSlider(body, 'p jitter', 0, 0.45, 0.02, P.absorbJitter ?? 0.18, v => { tile.params.absorbJitter = v; persistParams(); }, inspHint('ABSORBER', 'absorbJitter'));
   } else if (tile.kind === 'GOAL') {
-    bindParamSlider(body, 'capture p', 0.5, 0.999, 0.01, P.captureP ?? 0.93, v => { tile.params.captureP = v; persistParams(); });
-    bindParamSlider(body, 'capacity (0=∞)', 0, 500, 1, P.capacity | 0, v => { tile.params.capacity = v | 0; persistParams(); });
+    bindParamSlider(body, 'capture p', 0.5, 0.999, 0.01, P.captureP ?? 0.93, v => { tile.params.captureP = v; persistParams(); }, inspHint('GOAL', 'captureP'));
+    bindParamSlider(body, 'capacity (0=∞)', 0, 500, 1, P.capacity | 0, v => { tile.params.capacity = v | 0; persistParams(); }, inspHint('GOAL', 'capacity'));
     const cr = document.createElement('div');
     cr.className = 'color-row';
     const opts = ['any', ...COLOR_IDS];
@@ -1936,41 +2140,49 @@ function renderTileInspector() {
       };
       cr.appendChild(sw);
     }
-    body.appendChild(cr);
+    appendInspectorLabeledColors(body, 'catch filter', inspHint('GOAL', 'catchFilter'), cr);
   } else if (tile.kind === 'SPLITTER') {
-    bindParamSlider(body, 'split chance', 0, 1, 0.05, P.splitP, v => { tile.params.splitP = v; persistParams(); });
-    bindParamSlider(body, 'child speed ×', 0.3, 1, 0.02, P.childSpeed, v => { tile.params.childSpeed = v; persistParams(); });
-    bindParamSlider(body, 'angle jitter °', 0, 12, 0.5, P.angleJitterDeg ?? 3, v => { tile.params.angleJitterDeg = v; persistParams(); });
+    bindParamSlider(body, 'split chance', 0, 1, 0.05, P.splitP, v => { tile.params.splitP = v; persistParams(); }, inspHint('SPLITTER', 'splitP'));
+    bindParamSlider(body, 'child speed ×', 0.3, 1, 0.02, P.childSpeed, v => { tile.params.childSpeed = v; persistParams(); }, inspHint('SPLITTER', 'childSpeed'));
+    bindParamSlider(body, 'angle jitter °', 0, 12, 0.5, P.angleJitterDeg ?? 3, v => { tile.params.angleJitterDeg = v; persistParams(); }, inspHint('SPLITTER', 'angleJitterDeg'));
   } else if (tile.kind === 'RECOLOR') {
-    bindParamSlider(body, 'recolor rate', 0.5, 30, 0.5, P.recolorRate, v => { tile.params.recolorRate = v; persistParams(); });
-    bindParamSlider(body, 'quiet frames p', 0, 0.25, 0.02, P.skipP ?? 0.06, v => { tile.params.skipP = v; persistParams(); });
+    bindParamSlider(body, 'recolor rate', 0.5, 30, 0.5, P.recolorRate, v => { tile.params.recolorRate = v; persistParams(); }, inspHint('RECOLOR', 'recolorRate'));
+    bindParamSlider(body, 'quiet frames p', 0, 0.25, 0.02, P.skipP ?? 0.06, v => { tile.params.skipP = v; persistParams(); }, inspHint('RECOLOR', 'skipP'));
   } else if (tile.kind === 'SPEED_GATE') {
-    bindParamSlider(body, '∥ gain', 0.2, 2.5, 0.05, P.parallelGain, v => { tile.params.parallelGain = v; persistParams(); });
-    bindParamSlider(body, '⊥ gain', 0.2, 2.5, 0.05, P.tangentialGain, v => { tile.params.tangentialGain = v; persistParams(); });
-    bindParamSlider(body, 'gate applies p', 0.4, 0.999, 0.02, P.engageP ?? 0.88, v => { tile.params.engageP = v; persistParams(); });
+    bindParamSlider(body, '∥ gain', 0.2, 2.5, 0.05, P.parallelGain, v => { tile.params.parallelGain = v; persistParams(); }, inspHint('SPEED_GATE', 'parallelGain'));
+    bindParamSlider(body, '⊥ gain', 0.2, 2.5, 0.05, P.tangentialGain, v => { tile.params.tangentialGain = v; persistParams(); }, inspHint('SPEED_GATE', 'tangentialGain'));
+    bindParamSlider(body, 'gate applies p', 0.4, 0.999, 0.02, P.engageP ?? 0.88, v => { tile.params.engageP = v; persistParams(); }, inspHint('SPEED_GATE', 'engageP'));
   } else if (tile.kind === 'SWIRL') {
-    bindParamSlider(body, 'omega', 20, 500, 10, P.omega, v => { tile.params.omega = v; persistParams(); });
-    bindParamSlider(body, 'decay', 0.2, 6, 0.1, P.decay, v => { tile.params.decay = v; persistParams(); });
-    bindParamSlider(body, 'ω jitter', 0, 0.4, 0.02, P.omegaJitter ?? 0.14, v => { tile.params.omegaJitter = v; persistParams(); });
+    bindParamSlider(body, 'omega', 20, 500, 10, P.omega, v => { tile.params.omega = v; persistParams(); }, inspHint('SWIRL', 'omega'));
+    bindParamSlider(body, 'decay', 0.2, 6, 0.1, P.decay, v => { tile.params.decay = v; persistParams(); }, inspHint('SWIRL', 'decay'));
+    bindParamSlider(body, 'ω jitter', 0, 0.4, 0.02, P.omegaJitter ?? 0.14, v => { tile.params.omegaJitter = v; persistParams(); }, inspHint('SWIRL', 'omegaJitter'));
   } else if (tile.kind === 'TELEPORT') {
-    bindParamSlider(body, 'link id', 0, 7, 1, P.linkId | 0, v => { tile.params.linkId = v | 0; persistParams(); });
-    bindParamSlider(body, 'fail p', 0, 1, 0.02, P.malfunctionP, v => { tile.params.malfunctionP = v; persistParams(); });
-    bindParamSlider(body, 'exit cone °', 0, 60, 1, P.coneDeg, v => { tile.params.coneDeg = v; persistParams(); });
-    bindParamSlider(body, 'exit extra jitter °', 0, 22, 0.5, P.exitJitterDeg ?? 4, v => { tile.params.exitJitterDeg = v; persistParams(); });
+    bindParamSlider(body, 'link id', 0, 7, 1, P.linkId | 0, v => { tile.params.linkId = v | 0; persistParams(); }, inspHint('TELEPORT', 'linkId'));
+    bindParamSlider(body, 'fail p', 0, 1, 0.02, P.malfunctionP, v => { tile.params.malfunctionP = v; persistParams(); }, inspHint('TELEPORT', 'malfunctionP'));
+    bindParamSlider(body, 'exit cone °', 0, 60, 1, P.coneDeg, v => { tile.params.coneDeg = v; persistParams(); }, inspHint('TELEPORT', 'coneDeg'));
+    bindParamSlider(body, 'exit extra jitter °', 0, 22, 0.5, P.exitJitterDeg ?? 4, v => { tile.params.exitJitterDeg = v; persistParams(); }, inspHint('TELEPORT', 'exitJitterDeg'));
   } else if (tile.kind === 'MEMBRANE') {
-    bindParamSlider(body, 'leak p', 0, 1, 0.02, P.leakP, v => { tile.params.leakP = v; persistParams(); });
-    bindParamSlider(body, 'leak wobble', 0, 0.28, 0.02, P.wobbleP ?? 0.06, v => { tile.params.wobbleP = v; persistParams(); });
+    bindParamSlider(body, 'leak p', 0, 1, 0.02, P.leakP, v => { tile.params.leakP = v; persistParams(); }, inspHint('MEMBRANE', 'leakP'));
+    bindParamSlider(body, 'leak wobble', 0, 0.28, 0.02, P.wobbleP ?? 0.06, v => { tile.params.wobbleP = v; persistParams(); }, inspHint('MEMBRANE', 'wobbleP'));
   } else if (tile.kind === 'BEAM_SHAPER') {
-    bindParamSlider(body, 'slit width', 0.06, 0.45, 0.01, P.slitW, v => { tile.params.slitW = v; persistParams(); });
-    bindParamSlider(body, 'slit offset', -0.35, 0.35, 0.02, P.slitOffset, v => { tile.params.slitOffset = v; persistParams(); });
-    bindParamSlider(body, 'edge soft', 0, 0.2, 0.01, P.edgeSoft, v => { tile.params.edgeSoft = v; persistParams(); });
-    bindParamSlider(body, 'absorb p (abs mode)', 0, 1, 0.05, P.absorbP, v => { tile.params.absorbP = v; persistParams(); });
-    bindParamSlider(body, 'bounce skip p', 0, 0.35, 0.02, P.bounceSoftP ?? 0.12, v => { tile.params.bounceSoftP = v; persistParams(); });
+    bindParamSlider(body, 'slit width', 0.06, 0.45, 0.01, P.slitW, v => { tile.params.slitW = v; persistParams(); }, inspHint('BEAM_SHAPER', 'slitW'));
+    bindParamSlider(body, 'slit offset', -0.35, 0.35, 0.02, P.slitOffset, v => { tile.params.slitOffset = v; persistParams(); }, inspHint('BEAM_SHAPER', 'slitOffset'));
+    bindParamSlider(body, 'edge soft', 0, 0.2, 0.01, P.edgeSoft, v => { tile.params.edgeSoft = v; persistParams(); }, inspHint('BEAM_SHAPER', 'edgeSoft'));
+    bindParamSlider(body, 'absorb p (abs mode)', 0, 1, 0.05, P.absorbP, v => { tile.params.absorbP = v; persistParams(); }, inspHint('BEAM_SHAPER', 'absorbP'));
+    bindParamSlider(body, 'bounce skip p', 0, 0.35, 0.02, P.bounceSoftP ?? 0.12, v => { tile.params.bounceSoftP = v; persistParams(); }, inspHint('BEAM_SHAPER', 'bounceSoftP'));
+    inspFieldSeq += 1;
     const row = document.createElement('div');
     row.className = 'insp-select-row';
+    const lr = document.createElement('div');
+    lr.className = 'insp-label-row';
+    const selId = `insp-f-${inspFieldSeq}`;
     const lab = document.createElement('label');
+    lab.setAttribute('for', selId);
     lab.textContent = 'mode';
+    lr.appendChild(lab);
+    appendInspHintButton(lr, inspHint('BEAM_SHAPER', 'mode'));
     const sel = document.createElement('select');
+    sel.id = selId;
     for (const m of ['bounce', 'absorb']) {
       const o = document.createElement('option');
       o.value = m; o.textContent = m;
@@ -1978,23 +2190,23 @@ function renderTileInspector() {
       sel.appendChild(o);
     }
     sel.onchange = () => { tile.params.mode = sel.value; persistParams(); };
-    row.appendChild(lab);
+    row.appendChild(lr);
     row.appendChild(sel);
     body.appendChild(row);
   } else if (tile.kind === 'RESONATOR') {
-    bindParamSlider(body, 'amplitude', 50, 900, 10, P.amplitude, v => { tile.params.amplitude = v; persistParams(); });
-    bindParamSlider(body, 'freq', 0.5, 10, 0.1, P.freq, v => { tile.params.freq = v; persistParams(); });
-    bindParamSlider(body, 'amp jitter', 0, 0.35, 0.02, P.ampJitter ?? 0.14, v => { tile.params.ampJitter = v; persistParams(); });
+    bindParamSlider(body, 'amplitude', 50, 900, 10, P.amplitude, v => { tile.params.amplitude = v; persistParams(); }, inspHint('RESONATOR', 'amplitude'));
+    bindParamSlider(body, 'freq', 0.5, 10, 0.1, P.freq, v => { tile.params.freq = v; persistParams(); }, inspHint('RESONATOR', 'freq'));
+    bindParamSlider(body, 'amp jitter', 0, 0.35, 0.02, P.ampJitter ?? 0.14, v => { tile.params.ampJitter = v; persistParams(); }, inspHint('RESONATOR', 'ampJitter'));
   } else if (tile.kind === 'COLLIMATOR') {
-    bindParamSlider(body, 'divisions', 2, 24, 1, P.divisions | 0, v => { tile.params.divisions = v | 0; persistParams(); });
-    bindParamSlider(body, 'snap chance', 0, 1, 0.05, P.snapP, v => { tile.params.snapP = v; persistParams(); });
-    bindParamSlider(body, 'jitter °', 0, 25, 1, P.jitterDeg, v => { tile.params.jitterDeg = v; persistParams(); });
-    bindParamSlider(body, 'post-snap micro °', 0, 5, 0.1, P.microJitterDeg ?? 1.2, v => { tile.params.microJitterDeg = v; persistParams(); });
+    bindParamSlider(body, 'divisions', 2, 24, 1, P.divisions | 0, v => { tile.params.divisions = v | 0; persistParams(); }, inspHint('COLLIMATOR', 'divisions'));
+    bindParamSlider(body, 'snap chance', 0, 1, 0.05, P.snapP, v => { tile.params.snapP = v; persistParams(); }, inspHint('COLLIMATOR', 'snapP'));
+    bindParamSlider(body, 'jitter °', 0, 25, 1, P.jitterDeg, v => { tile.params.jitterDeg = v; persistParams(); }, inspHint('COLLIMATOR', 'jitterDeg'));
+    bindParamSlider(body, 'post-snap micro °', 0, 5, 0.1, P.microJitterDeg ?? 1.2, v => { tile.params.microJitterDeg = v; persistParams(); }, inspHint('COLLIMATOR', 'microJitterDeg'));
   } else if (tile.kind === 'BUFFER') {
-    bindParamSlider(body, 'max hold', 1, 200, 1, P.maxK | 0, v => { tile.params.maxK = v | 0; persistParams(); });
-    bindParamSlider(body, 'release / sec', 0.5, 80, 0.5, P.releaseRate, v => { tile.params.releaseRate = v; persistParams(); });
-    bindParamSlider(body, 'slip past p', 0, 0.2, 0.005, P.slipP ?? 0.022, v => { tile.params.slipP = v; persistParams(); });
-    bindParamSlider(body, 'burst when full', 0, 1, 1, P.burstOnFull | 0, v => { tile.params.burstOnFull = v | 0; persistParams(); });
+    bindParamSlider(body, 'max hold', 1, 200, 1, P.maxK | 0, v => { tile.params.maxK = v | 0; persistParams(); }, inspHint('BUFFER', 'maxK'));
+    bindParamSlider(body, 'release / sec', 0.5, 80, 0.5, P.releaseRate, v => { tile.params.releaseRate = v; persistParams(); }, inspHint('BUFFER', 'releaseRate'));
+    bindParamSlider(body, 'slip past p', 0, 0.2, 0.005, P.slipP ?? 0.022, v => { tile.params.slipP = v; persistParams(); }, inspHint('BUFFER', 'slipP'));
+    bindParamSlider(body, 'burst when full', 0, 1, 1, P.burstOnFull | 0, v => { tile.params.burstOnFull = v | 0; persistParams(); }, inspHint('BUFFER', 'burstOnFull'));
   }
 
   if (tile.kind !== 'SOURCE') {
@@ -2002,10 +2214,92 @@ function renderTileInspector() {
     bindParamSlider(body, 'energy drain / tick', 0, 12, 0.02, P.energyDrain ?? defDrain, v => {
       tile.params.energyDrain = Math.max(0, v);
       persistParams();
-    });
+    }, inspHint('ALL', 'energyDrain'));
   }
 
   host.appendChild(body);
+
+  const tail = document.createElement('div');
+  tail.className = 'insp-tail-stats';
+  tail.innerHTML = '<div class="insp-stats-label">stats</div>'
+    + formatPairRowsHtml([...instRows, ...kindRows]);
+  host.appendChild(tail);
+}
+
+function countTilesOfKind(state, kind) {
+  let n = 0;
+  for (const t of state.tiles.values()) {
+    if (t.kind === kind) n++;
+  }
+  return n;
+}
+
+function layoutCostForKind(state, kind) {
+  const unit = TILE_MATERIAL_COST[kind] ?? 12;
+  return countTilesOfKind(state, kind) * unit;
+}
+
+function collectKindDetailStatPairs(state, kind) {
+  const rows = [];
+  const nPlaced = countTilesOfKind(state, kind);
+  rows.push(['placed', String(nPlaced)]);
+  rows.push(['layout cost', String(layoutCostForKind(state, kind))]);
+
+  if (kind === 'GOAL') {
+    let cap = 0;
+    let captured = 0;
+    for (const t of state.tiles.values()) {
+      if (t.kind !== 'GOAL') continue;
+      captured += t._captured | 0;
+      cap += t.params.capacity | 0;
+    }
+    rows.push(['Σ captured', String(captured)]);
+    rows.push(['capacity Σ', cap > 0 ? String(cap) : '∞']);
+  } else if (kind === 'BUFFER') {
+    let used = 0;
+    let cap = 0;
+    for (const t of state.tiles.values()) {
+      if (t.kind !== 'BUFFER') continue;
+      const maxK = Math.max(1, t.params.maxK | 0);
+      cap += maxK;
+      used += (t._buf || []).length;
+    }
+    rows.push(['buffer slots', cap > 0 ? `${used}/${cap}` : '—']);
+  } else if (kind === 'SOURCE') {
+    let withBudget = 0;
+    let left = 0;
+    let cap = 0;
+    for (const t of state.tiles.values()) {
+      if (t.kind !== 'SOURCE') continue;
+      const b = t.params.energyBudget | 0;
+      if (b > 0) {
+        withBudget++;
+        cap += b;
+        left += t._energyLeft != null ? t._energyLeft : b;
+      }
+    }
+    rows.push(['SRC with budget', String(withBudget)]);
+    rows.push(['SRC budget left', cap > 0 ? `${((100 * left) / cap).toFixed(0)}%` : '—']);
+  } else if (kind === 'TELEPORT') {
+    const byLink = new Map();
+    for (const t of state.tiles.values()) {
+      if (t.kind !== 'TELEPORT') continue;
+      const lid = t.params.linkId | 0;
+      byLink.set(lid, (byLink.get(lid) || 0) + 1);
+    }
+    const parts = [...byLink.entries()].sort((a, b) => a[0] - b[0]).map(([k, v]) => `${k}:${v}`);
+    rows.push(['by link id', parts.length ? parts.join(' ') : '—']);
+  }
+
+  const runPairs = KIND_RUN_ROWS[kind];
+  const rs = state.runStats;
+  if (runPairs) {
+    for (const [label, key] of runPairs) {
+      rows.push([`${label} (q)`, String(rs[key] ?? 0)]);
+    }
+  }
+
+  return rows;
 }
 
 /* ---------- Palette & HUD ---------- */
@@ -2026,6 +2320,7 @@ function renderPalette() {
     const kind = level.palette[i];
     const entry = document.createElement('div');
     entry.className = 'palette-entry';
+    entry.dataset.paletteKind = kind;
     if (ui.brush && ui.brush.kind === kind) entry.classList.add('active');
     const hk = paletteHotkeyLabel(i);
     if (hk) {
@@ -2035,6 +2330,7 @@ function renderPalette() {
       badge.title = i < 10 ? `Hotkey ${hk}` : `Hotkey Shift+${hk.slice(1)}`;
       entry.appendChild(badge);
     }
+
     const glyph = document.createElementNS(SVG_NS, 'svg');
     glyph.setAttribute('class', 'pe-glyph');
     glyph.setAttribute('viewBox', `0 0 ${INNER_DESIGN_PX} ${INNER_DESIGN_PX}`);
@@ -2241,22 +2537,21 @@ function computeParticleMetrics(state) {
   };
 }
 
-function renderGoals() {
-  const host = document.getElementById('task');
-  host.innerHTML = '';
-  const goals = [...APP.state.tiles.values()].filter(t => t.kind === 'GOAL');
+/** Goals summary for the top of the simulation stats hover panel. */
+function formatGoalsStatsHtml(state) {
+  const goals = [...state.tiles.values()].filter(t => t.kind === 'GOAL');
+  const sum = goalsCapturedSum(state);
   if (goals.length === 0) {
-    host.innerHTML = '<div class="tp-label">no goals placed</div>';
-    return;
+    return '<div class="stats-goals">'
+      + '<div class="stats-goals-title">goals</div>'
+      + '<div class="sp-row"><span>none placed</span><b>—</b></div>'
+      + '</div>';
   }
-  for (const g of goals) {
-    const row = document.createElement('div');
-    row.className = 'tp-row';
+  const rows = goals.map(g => {
     const filt = g.params.filterColor || 'any';
-    row.innerHTML = `<div class="tp-label">goal #${g.id} (${filt})</div>
-      <div class="tp-str"><b>${g._captured ?? 0}</b> captured</div>`;
-    host.appendChild(row);
-  }
+    return `<div class="sp-row"><span>goal #${g.id} (${filt})</span><b>${g._captured ?? 0}</b></div>`;
+  }).join('');
+  return `<div class="stats-goals"><div class="stats-goals-title">goals · Σ ${sum} captured</div>${rows}</div>`;
 }
 
 function renderHUD() {
@@ -2301,7 +2596,6 @@ function renderHUD() {
     ['buffer slots', bufCap.cap > 0 ? `${bufCap.used}/${bufCap.cap}` : '—'],
     ['buffer fill', bufFill],
     ['SRC budget', srcBudgetStr],
-    ['goals Σ captured', String(goalsCapturedSum(st))],
     ['⟨speed⟩', n ? pm.meanSpeed.toFixed(1) : '—'],
     ['speed min–max', n ? `${pm.minSpeed.toFixed(0)}–${pm.maxSpeed.toFixed(0)}` : '—'],
     ['⟨energy⟩', n ? (pm.meanEnergyFrac * 100).toFixed(0) + '%' : '—'],
@@ -2327,7 +2621,8 @@ function renderHUD() {
   ];
   const rowHtml = (a, rowClass = '') => a.map(([k, v]) =>
     `<div class="sp-row${rowClass ? ` ${rowClass}` : ''}"><span>${k}</span><b>${v}</b></div>`).join('');
-  host.innerHTML = rowHtml(headRows)
+  host.innerHTML = formatGoalsStatsHtml(st)
+    + rowHtml(headRows)
     + '<div class="sp-zh">layout score</div>'
     + rowHtml(zhRows, 'sp-zh-metric')
     + rowHtml(rows)
@@ -2551,15 +2846,23 @@ function attachBoardInput(boardEl) {
     if (APP.state.ui.brush) {
       const b = APP.state.ui.brush;
       if (canPlaceTileCenter(APP.state, world.x, world.y, null, b.kind)) {
-        withBoardEdit(APP.state, () => !!placeTile(
-          APP.state,
-          b.kind,
-          world.x,
-          world.y,
-          b.rotationRad ?? 0,
-          b.scale ?? 1,
-          b.params,
-        ));
+        let placed = null;
+        withBoardEdit(APP.state, () => {
+          placed = placeTile(
+            APP.state,
+            b.kind,
+            world.x,
+            world.y,
+            b.rotationRad ?? 0,
+            b.scale ?? 1,
+            b.params,
+          );
+          return !!placed;
+        });
+        if (placed) {
+          selectTileForInspector(placed);
+          inspectorDomSig = '';
+        }
         APP.state.ui.brush = null;
       }
       APP.render();
@@ -2809,7 +3112,6 @@ function togglePlay() {
       if (anyGlow) renderBoardSvg(APP.state, document.getElementById('board'));
       renderParticlesCanvas(APP.state);
       renderHUD();
-      renderGoals();
       sim.raf = requestAnimationFrame(loop);
     };
     sim.raf = requestAnimationFrame(loop);
@@ -2826,7 +3128,6 @@ function renderAll() {
   renderParticlesCanvas(APP.state);
   renderPalette();
   renderTileInspector();
-  renderGoals();
   renderHUD();
   document.getElementById('btn-undo').disabled = APP.state.history.past.length === 0;
   document.getElementById('btn-redo').disabled = APP.state.history.future.length === 0;
