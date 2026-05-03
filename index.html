@@ -10,7 +10,12 @@
 
   <div id="screen-game" class="screen" tabindex="-1" autofocus>
     <header class="topbar">
-      <button id="btn-rotate" class="icon-btn" type="button" title="rotate hovered">rot [r]</button>
+      <div class="tool-picker" role="toolbar" aria-label="transform tools">
+        <button id="tool-move" type="button" class="tool-btn active" title="Move [w]">move [w]</button>
+        <button id="tool-rotate" type="button" class="tool-btn" title="Rotate [e]">rotate [e]</button>
+        <button id="tool-scale" type="button" class="tool-btn" title="Scale [r]">scale [r]</button>
+      </div>
+      <button id="btn-rotate" class="icon-btn" type="button" title="rotate hovered 90°">rot 90°</button>
       <button id="btn-delete" class="icon-btn" type="button" title="delete hovered">del [d]</button>
       <button id="btn-undo" class="icon-btn" type="button" title="undo">undo [z]</button>
       <button id="btn-redo" class="icon-btn" type="button" title="redo">redo [x]</button>

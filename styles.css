@@ -73,6 +73,32 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   gap: 16px;
 }
 
+.tool-picker {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--fg);
+  margin-right: 4px;
+}
+.tool-btn {
+  font-family: inherit;
+  font-size: 10px;
+  padding: 4px 8px;
+  border: none;
+  border-right: 1px solid var(--fg);
+  background: var(--bg);
+  color: var(--fg);
+  cursor: pointer;
+  text-transform: lowercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.tool-btn:last-child { border-right: none; }
+.tool-btn:hover { background: var(--grey-1); }
+.tool-btn.active {
+  background: var(--fg);
+  color: var(--bg);
+}
+
 .icon-btn {
   border: 1px solid var(--fg);
   min-width: 28px;
@@ -296,6 +322,21 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   letter-spacing: 0.05em;
 }
 .tile-stroke { stroke: var(--fg); stroke-width: 1.5; fill: none; }
+
+/* Pointer over tile (W/E/R): bolder chrome; rotate/scale still draw their handles. */
+#layer-tiles g.board-tile-hover .tile-frame {
+  stroke-width: 2.65;
+}
+#layer-tiles g.board-tile-hover .tile-frame.inspector-target {
+  stroke-width: 3.1;
+}
+#layer-tiles g.board-tile-hover .tile-stroke {
+  stroke-width: 2.45;
+}
+#layer-tiles g.board-tile-hover .tile-label {
+  font-weight: 600;
+}
+
 .ghost-frame { fill: var(--bg); stroke: var(--grey-2); stroke-width: 1.5; stroke-dasharray: 3 2; }
 .ghost-arrow { fill: var(--grey-2); }
 .ghost-label { fill: var(--grey-2); }
@@ -304,6 +345,64 @@ button:disabled:hover { background: var(--bg); color: var(--grey-2); }
   stroke: var(--grey-3);
   stroke-width: 1.5;
   stroke-dasharray: 4 2;
+  pointer-events: none;
+}
+
+/* Gizmo overlay: one tool mode at a time; children opt into pointer-events. */
+.gizmo-layer { pointer-events: none; }
+.gizmo-move-hit {
+  fill: rgba(0, 0, 0, 0.001);
+  stroke: none;
+  pointer-events: all;
+  cursor: move;
+}
+.gizmo-ring {
+  fill: none;
+  stroke: var(--fg);
+  stroke-width: 2.6;
+  stroke-dasharray: 5 4;
+  pointer-events: none;
+}
+.gizmo-ring-inner { pointer-events: none; }
+.gizmo-rotate-hit {
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.001);
+  stroke-width: 68;
+  pointer-events: stroke;
+  cursor: grab;
+}
+.gizmo-tick { stroke: var(--fg); stroke-width: 2.4; pointer-events: none; }
+.gizmo-scale-axis {
+  stroke: var(--fg);
+  stroke-width: 2.8;
+  fill: none;
+  pointer-events: none;
+}
+.gizmo-scale-hit {
+  stroke: rgba(0, 0, 0, 0.001);
+  stroke-width: 60;
+  fill: none;
+  pointer-events: stroke;
+  cursor: ew-resize;
+}
+.gizmo-scale-knob-hit {
+  fill: rgba(0, 0, 0, 0.001);
+  stroke: none;
+  pointer-events: all;
+  cursor: ew-resize;
+}
+.gizmo-scale-knob {
+  fill: var(--fg);
+  stroke: var(--bg);
+  stroke-width: 1.4;
+  pointer-events: all;
+  cursor: ew-resize;
+}
+.gizmo-hud {
+  fill: var(--fg);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  letter-spacing: 0.06em;
   pointer-events: none;
 }
 

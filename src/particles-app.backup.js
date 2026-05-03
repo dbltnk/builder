@@ -115,12 +115,6 @@ const SANDBOX = {
 /** Design-space tile art is authored in this square (px); scaled to `cellPx` on the board. */
 const INNER_DESIGN_PX = 56;
 
-/**
- * Half-extent as fraction of board `cp` for the outer `tile-frame` in drawTileG (`x/y = 3`,
- * `width/height = INNER − 6`), i.e. (INNER/2 − 3) / INNER. Matches glow + hitbox to that square.
- */
-const COLLIDER_FRAME_HALF = (INNER_DESIGN_PX / 2 - 3) / INNER_DESIGN_PX;
-
 /** Unity-style transform tools (toolbar + W/E/R). */
 const TOOL_MODES = /** @type {const} */ (['move', 'rotate', 'scale']);
 
@@ -177,36 +171,28 @@ function dot(ax, ay, bx, by) {
 const SCALE_MIN = 0.25;
 const SCALE_MAX = 3;
 
-/**
- * Collider shapes vs `drawTileG` (design cell `INNER_DESIGN_PX`):
- * fractions are of **board** `cp` — same ratios as author px / `INNER_DESIGN_PX` when art uses that cell.
- * Keep circle only where the ink is actually circular; otherwise use KIND_BOX to match strokes/frames.
- */
+/** Circle colliders: r = radius as fraction of cell size cp (same convention as old hw/hh scale). */
 const KIND_CIRCLE = {
-  /** Only true circular ink (concentric rings); outer ring r = 12 author px. */
-  GOAL: { r: 12 / INNER_DESIGN_PX },
+  SOURCE: { r: 0.14 },
+  DIFFUSER: { r: 0.27 },
+  GOAL: { r: 0.24 },
+  RECOLOR: { r: 0.18 },
+  SWIRL: { r: 0.27 },
+  TELEPORT: { r: 0.16 },
+  RESONATOR: { r: 0.26 },
+  COLLIMATOR: { r: 0.24 },
 };
 
 /** Box colliders in tile-local axes at rotationRad=0; hw, hh = half extents as fractions of cp. */
 const KIND_BOX = {
-  /** Central 20×20 chrome in author px. */
-  SOURCE: { hw: 10 / INNER_DESIGN_PX, hh: 10 / INNER_DESIGN_PX },
-  /** Same outer frame square as the sprite (`!compactChrome` branch). */
-  FOCUS: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  DIFFUSER: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
+  FOCUS: { hw: 0.24, hh: 0.20 },
   REFLECTOR: { hw: 0.48, hh: 0.09 },
   ABSORBER: { hw: 0.16, hh: 0.16 },
-  SPLITTER: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  /** Stroke rect 22×14 centered. */
-  RECOLOR: { hw: 11 / INNER_DESIGN_PX, hh: 7 / INNER_DESIGN_PX },
-  SPEED_GATE: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  SWIRL: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  TELEPORT: { hw: 9 / INNER_DESIGN_PX, hh: 9 / INNER_DESIGN_PX },
+  SPLITTER: { hw: 0.20, hh: 0.20 },
+  SPEED_GATE: { hw: 0.27, hh: 0.14 },
   MEMBRANE: { hw: 0.08, hh: 0.48 },
   BEAM_SHAPER: { hw: 0.46, hh: 0.10 },
-  RESONATOR: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  COLLIMATOR: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  BUFFER: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
+  BUFFER: { hw: 0.22, hh: 0.18 },
 };
 
 function tileShape(kind) {
@@ -744,42 +730,6 @@ function bumpTileInteractGlow(tile, colorId, delta) {
 function interactGlowDisplayHex(colorId) {
   if (!colorId || colorId === 'black') return '#888888';
   return COLOR_HEX[colorId] || '#888888';
-}
-
-/**
- * Hit-flash in **board/world pixels**: same `scaledShape` + `tileAxes` as `pointInTile` (no author-space
- * or `innerPx` mapping), so size, shape, and orientation match the collider exactly.
- */
-function appendInteractGlowWorld(layer, tile, cp, hex, opacityStr) {
-  const sh = scaledShape(tile);
-  const common = {
-    class: 'tile-interact-glow',
-    fill: hex,
-    opacity: opacityStr,
-    'pointer-events': 'none',
-  };
-  if (sh.kind === 'circle') {
-    const r = sh.r * cp;
-    layer.appendChild(svg('circle', {
-      ...common,
-      cx: tile.x,
-      cy: tile.y,
-      r: Math.max(0.05, r),
-    }));
-    return;
-  }
-  const hw = sh.hw * cp;
-  const hh = sh.hh * cp;
-  const { fx, fy, rx: rxv, ry: ryv } = tileAxes(tile);
-  const cx = tile.x;
-  const cy = tile.y;
-  const corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
-  const pts = corners.map(([lx, ly]) => {
-    const wx = cx + lx * fx + ly * rxv;
-    const wy = cy + lx * fy + ly * ryv;
-    return `${wx},${wy}`;
-  }).join(' ');
-  layer.appendChild(svg('polygon', { ...common, points: pts }));
 }
 
 function decayTileInteractGlows(state, dt) {
@@ -1598,13 +1548,23 @@ function renderBoardSvg(state, host) {
       const fr = root.querySelector('.tile-frame, .ghost-frame');
       if (fr) fr.classList.add('inspector-target');
     }
-    layerTiles.appendChild(root);
     if (tile._interactGlow && tile._interactGlow.level > 0.004) {
       const hex = interactGlowDisplayHex(tile._interactGlow.colorId);
       const lv = tile._interactGlow.level;
       const op = Math.min(0.72, 0.12 + Math.pow(lv, 0.85) * 0.62);
-      appendInteractGlowWorld(layerTiles, tile, cp, hex, String(op));
+      root.appendChild(svg('rect', {
+        class: 'tile-interact-glow',
+        x: 4,
+        y: 4,
+        width: innerDesign - 8,
+        height: innerDesign - 8,
+        rx: 2,
+        fill: hex,
+        opacity: String(op),
+        'pointer-events': 'none',
+      }));
     }
+    layerTiles.appendChild(root);
   }
 
   if (hoverW) {
