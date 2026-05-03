@@ -128,7 +128,7 @@ const SANDBOX = {
   cellPx: 36,
   palette: [
     'SOURCE', 'GOAL', 'VELOCITY', 'RECOLOR', 'ABSORBER', 'BUFFER',
-    'REFLECTOR', 'MEMBRANE', 'DIFFUSER', 'SPLITTER', 'TELEPORT', 'RESONATOR', 'SWIRL',
+    'REFLECTOR', 'MEMBRANE', 'DIFFUSER', 'SPLITTER', 'TELEPORT', 'RESONATOR', 'VORTEX',
   ],
 };
 
@@ -219,7 +219,7 @@ const KIND_BOX = {
   /** Stroke rect ~26×16 centered (matches draw chrome). */
   RECOLOR: { hw: 13 / INNER_DESIGN_PX, hh: 8 / INNER_DESIGN_PX },
   VELOCITY: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
-  SWIRL: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
+  VORTEX: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
   TELEPORT: { hw: 11 / INNER_DESIGN_PX, hh: 11 / INNER_DESIGN_PX },
   MEMBRANE: { hw: 0.08, hh: 0.48 },
   RESONATOR: { hw: COLLIDER_FRAME_HALF, hh: COLLIDER_FRAME_HALF },
@@ -400,7 +400,7 @@ function defaultParams(kind) {
     SPLITTER: { splitP: 1, childSpeed: 0.72, splitAngleDeg: 30, angleJitterDeg: 3, energyDrain: 0.42 },
     RECOLOR: { recolorRate: 6, skipP: 0.06, assignColorId: 'red', energyDrain: 0.18 },
     VELOCITY: { parallelGain: 1.05, tangentialGain: 1, engageP: 0.88, energyDrain: 0.28 },
-    SWIRL: { omega: 520, decay: 1.25, omegaJitter: 0.14, energyDrain: 0.22 },
+    VORTEX: { omega: 520, decay: 1.25, omegaJitter: 0.14, energyDrain: 0.22 },
     TELEPORT: { linkId: 0, malfunctionP: 0, coneDeg: 12, exitJitterDeg: 4, energyDrain: 0.35 },
     MEMBRANE: { leakP: 0.08, wobbleP: 0.06, energyDrain: 0.26 },
     RESONATOR: { amplitude: 540, freq: 4.2, ampJitter: 0.14, energyDrain: 0.26 },
@@ -419,22 +419,28 @@ function makeDefaultBrush(kind) {
   return { kind, rotationRad: defaultBrushRotationRad(kind), scale: 1, params: defaultParams(kind) };
 }
 
-/** Labels only; every kind supports move / rotate / scale (same hitbox + draw path as the board). */
+/**
+ * `label`: short text on the tile glyph. `name`: palette / inspector title (should read naturally with that abbreviation).
+ */
 const KIND_META = {
-  SOURCE: { label: 'SRC' },
-  DIFFUSER: { label: 'DIF' },
-  REFLECTOR: { label: 'REF' },
-  ABSORBER: { label: 'ABS' },
-  GOAL: { label: 'GOAL' },
-  SPLITTER: { label: 'SPL' },
-  RECOLOR: { label: 'CLR' },
-  VELOCITY: { label: 'VEL' },
-  SWIRL: { label: 'VOR' },
-  TELEPORT: { label: 'TEL' },
-  MEMBRANE: { label: 'SLT' },
-  RESONATOR: { label: 'RSN' },
-  BUFFER: { label: 'BUF' },
+  SOURCE: { name: 'Source', label: 'SRC' },
+  DIFFUSER: { name: 'Diffuser', label: 'DIF' },
+  REFLECTOR: { name: 'Reflector', label: 'REF' },
+  ABSORBER: { name: 'Absorber', label: 'ABS' },
+  GOAL: { name: 'Goal', label: 'GOAL' },
+  SPLITTER: { name: 'Splitter', label: 'SPL' },
+  RECOLOR: { name: 'Recolor', label: 'CLR' },
+  VELOCITY: { name: 'Velocity', label: 'VEL' },
+  VORTEX: { name: 'Vortex', label: 'VOR' },
+  TELEPORT: { name: 'Teleport', label: 'TEL' },
+  MEMBRANE: { name: 'Slit', label: 'SLT' },
+  RESONATOR: { name: 'Resonator', label: 'RSN' },
+  BUFFER: { name: 'Buffer', label: 'BUF' },
 };
+
+function kindDisplayName(kind) {
+  return KIND_META[kind]?.name ?? kind;
+}
 
 /**
  * Player-facing: what the tile is for in a build, and the main rule for how it acts.
@@ -457,12 +463,12 @@ const KIND_PLAYER_HELP = {
     'Sets channel. While overlapping, periodically assigns the chosen particle color (or a random channel when set to random).',
   VELOCITY:
     'Tunes speed only (bearing unchanged). ∥ and ⊥ gains set a target scale from your motion mix; the sim eases |v| toward that target each tick so extremes do not compound instantly, but strong gains still read clearly.',
-  SWIRL:
+  VORTEX:
     'Curves paths. Applies twist around the tile while inside; strength falls off with distance from the center.',
   TELEPORT:
     'Moves position. Match link IDs in pairs; entering one exits the other aiming within a cone (can misfire).',
   MEMBRANE:
-    'Leaky wall. Mostly blocks, but some crossings leak straight through or wobble along the slit instead of reflecting.',
+    'Leaky slit. Mostly blocks, but some crossings leak straight through or wobble along the gap instead of reflecting.',
   RESONATOR:
     'Pumps rhythm. While in range, adds an in/out radial shove that oscillates—timing matters for how you cross.',
   BUFFER:
@@ -519,9 +525,9 @@ const INSPECTOR_PARAM_HINTS = {
     tangentialGain: 'Target scale for motion across the aim. Weighted with ∥ by speed components; direction stays fixed while speed scales.',
     engageP: 'Per substep, chance to apply one easing step toward the target speed scale.',
   },
-  SWIRL: {
+  VORTEX: {
     omega: 'Angular “spin” strength applied to velocity while inside (higher = tighter curving).',
-    decay: 'How quickly swirl influence falls off with distance from the tile center.',
+    decay: 'How quickly vortex influence falls off with distance from the tile center.',
     omegaJitter: 'Randomizes effective spin strength tick to tick.',
   },
   TELEPORT: {
@@ -532,7 +538,7 @@ const INSPECTOR_PARAM_HINTS = {
   },
   MEMBRANE: {
     leakP: 'Chance per crossing that the particle slips straight through instead of interacting with the barrier.',
-    wobbleP: 'Chance to skim along the membrane with a perturbed path instead of a clean reflect or leak.',
+    wobbleP: 'Chance to skim along the slit with a perturbed path instead of a clean reflect or leak.',
   },
   RESONATOR: {
     amplitude: 'Peak strength of the oscillating radial push/pull while particles are in range.',
@@ -574,7 +580,7 @@ const TILE_MATERIAL_COST = {
   SPLITTER: 22,
   RECOLOR: 13,
   VELOCITY: 15,
-  SWIRL: 18,
+  VORTEX: 18,
   TELEPORT: 26,
   MEMBRANE: 14,
   RESONATOR: 20,
@@ -636,6 +642,7 @@ function createState() {
 /** Persisted boards may use retired kind names; normalize before sim / palette. */
 function migrateTileKind(kind) {
   if (kind === 'SPEED_GATE') return 'VELOCITY';
+  if (kind === 'SWIRL') return 'VORTEX';
   return kind;
 }
 
@@ -979,7 +986,7 @@ function applyCellForces(state, p, dt, tile, cp) {
     p.vy *= blend;
     return;
   }
-  if (k === 'SWIRL') {
+  if (k === 'VORTEX') {
     const R = hypot(rx, ry) + EPS;
     const oj = clamp(tile.params.omegaJitter ?? 0.14, 0, 0.45);
     const om = ((tile.params.omega ?? 520) / R) * (1 + (Math.random() * 2 - 1) * oj);
@@ -1024,6 +1031,15 @@ function applyCellForces(state, p, dt, tile, cp) {
   }
 }
 
+/** World position just past the buffer hitbox along ejection bearing `ang` (avoids same-tick re-queue). */
+function bufferEjectPosition(tile, cp, ang) {
+  const rClear = boundingRadiusPx(tile, cp) + cp * 0.09;
+  return {
+    x: tile.x + Math.cos(ang) * rClear,
+    y: tile.y + Math.sin(ang) * rClear,
+  };
+}
+
 function processBuffers(state, dt) {
   const { cp } = worldSize(state);
   for (const t of state.tiles.values()) {
@@ -1037,12 +1053,13 @@ function processBuffers(state, dt) {
         const b = buf.shift();
         const ang = tileRotationRad(t) + (Math.random() * 0.2 - 0.1);
         const sp = hypot(b.vx, b.vy) || 80;
+        const pos = bufferEjectPosition(t, cp, ang);
         const em = b.energyMax != null ? b.energyMax : (b.energy != null ? b.energy : 100);
         const e0 = b.energy != null ? b.energy : em;
         state.particles.push({
           id: state.nextParticleId++,
-          x: t.x,
-          y: t.y,
+          x: pos.x,
+          y: pos.y,
           vx: Math.cos(ang) * sp,
           vy: Math.sin(ang) * sp,
           colorId: b.colorId,
@@ -1066,12 +1083,13 @@ function processBuffers(state, dt) {
         if (!b) break;
         const ang = tileRotationRad(t) + (Math.random() * 2 - 1) * 0.18;
         const sp = hypot(b.vx, b.vy) || 80;
+        const pos = bufferEjectPosition(t, cp, ang);
         const em = b.energyMax != null ? b.energyMax : (b.energy != null ? b.energy : 100);
         const e0 = b.energy != null ? b.energy : em;
         state.particles.push({
           id: state.nextParticleId++,
-          x: t.x + (Math.random() - 0.5) * cp * 0.05,
-          y: t.y + (Math.random() - 0.5) * cp * 0.05,
+          x: pos.x,
+          y: pos.y,
           vx: Math.cos(ang) * sp,
           vy: Math.sin(ang) * sp,
           colorId: b.colorId,
@@ -1120,7 +1138,8 @@ function subStep(state, dt, telePairs) {
     if (t.kind === 'BUFFER') {
       const buf = t._buf || (t._buf = []);
       const maxK = Math.max(1, t.params.maxK | 0);
-      if (buf.length < maxK) {
+      // Only enqueue on first overlap with this tile; otherwise released dots at the center get re-captured every tick.
+      if (buf.length < maxK && entered) {
         const slip = clamp(t.params.slipP ?? 0.022, 0, 0.22);
         if (Math.random() >= slip) {
           buf.push({
@@ -1331,7 +1350,7 @@ function appendSvgColorWheelDisc(parent, cx, cy, r) {
   }
 }
 
-/** Keep short palette label upright while the tile body rotates (REF, SLT / membrane). */
+/** Keep short glyph label upright while the tile body rotates (REF, SLT on slit tiles). */
 function appendLabelUpright(g, tile, cx, labY, labelC, fontSize, lab) {
   const deg = -((tile.rotationRad ?? 0) * 180) / Math.PI;
   const wrap = svg('g', { transform: `rotate(${deg} ${cx} ${labY})` });
@@ -1425,7 +1444,7 @@ function drawTileG(tile, ghost) {
       class: 'tile-stroke',
     }));
     g.appendChild(svg('text', { x: cx, y: cy + 20, class: labelC, 'font-size': '8' }, lab));
-  } else if (tile.kind === 'SWIRL') {
+  } else if (tile.kind === 'VORTEX') {
     g.appendChild(svg('path', {
       d: `M ${cx + 10} ${cy} A 10 10 0 1 1 ${cx} ${cy - 10}`,
       class: 'tile-stroke', fill: 'none',
@@ -2018,7 +2037,7 @@ function renderTileInspector() {
   hdrRow.className = 'inspector-header-row';
   const hdr = document.createElement('div');
   hdr.className = 'inspector-header';
-  hdr.textContent = `${tile.kind}  ·  ${tile.x.toFixed(0)},${tile.y.toFixed(0)}`;
+    hdr.textContent = `${kindDisplayName(tile.kind)}  ·  ${tile.x.toFixed(0)},${tile.y.toFixed(0)}`;
   const pill = document.createElement('span');
   pill.className = 'inspector-sel-pill';
   pill.textContent = 'selected';
@@ -2145,10 +2164,10 @@ function renderTileInspector() {
     bindParamSlider(body, '∥ gain (aim)', 0.05, 2.5, 0.05, P.parallelGain, v => { tile.params.parallelGain = v; persistParams(); }, inspHint('VELOCITY', 'parallelGain'));
     bindParamSlider(body, '⊥ gain', 0.05, 2.5, 0.05, P.tangentialGain, v => { tile.params.tangentialGain = v; persistParams(); }, inspHint('VELOCITY', 'tangentialGain'));
     bindParamSlider(body, 'applies p', 0.4, 0.999, 0.02, P.engageP ?? 0.88, v => { tile.params.engageP = v; persistParams(); }, inspHint('VELOCITY', 'engageP'));
-  } else if (tile.kind === 'SWIRL') {
-    bindParamSlider(body, 'omega', 20, 900, 10, P.omega, v => { tile.params.omega = v; persistParams(); }, inspHint('SWIRL', 'omega'));
-    bindParamSlider(body, 'decay', 0.2, 6, 0.1, P.decay, v => { tile.params.decay = v; persistParams(); }, inspHint('SWIRL', 'decay'));
-    bindParamSlider(body, 'ω jitter', 0, 0.4, 0.02, P.omegaJitter ?? 0.14, v => { tile.params.omegaJitter = v; persistParams(); }, inspHint('SWIRL', 'omegaJitter'));
+  } else if (tile.kind === 'VORTEX') {
+    bindParamSlider(body, 'omega', 20, 900, 10, P.omega, v => { tile.params.omega = v; persistParams(); }, inspHint('VORTEX', 'omega'));
+    bindParamSlider(body, 'decay', 0.2, 6, 0.1, P.decay, v => { tile.params.decay = v; persistParams(); }, inspHint('VORTEX', 'decay'));
+    bindParamSlider(body, 'ω jitter', 0, 0.4, 0.02, P.omegaJitter ?? 0.14, v => { tile.params.omegaJitter = v; persistParams(); }, inspHint('VORTEX', 'omegaJitter'));
   } else if (tile.kind === 'TELEPORT') {
     bindParamSlider(body, 'link id', 0, 7, 1, P.linkId | 0, v => { tile.params.linkId = v | 0; persistParams(); }, inspHint('TELEPORT', 'linkId'));
     bindParamSlider(body, 'fail p', 0, 1, 0.02, P.malfunctionP, v => { tile.params.malfunctionP = v; persistParams(); }, inspHint('TELEPORT', 'malfunctionP'));
@@ -2307,7 +2326,7 @@ function renderPalette() {
     entry.appendChild(glyph);
     const label = document.createElement('div');
     label.className = 'pe-label';
-    label.textContent = `${kind}`;
+    label.textContent = kindDisplayName(kind);
     entry.appendChild(label);
     const rotBox = document.createElement('div');
     rotBox.className = 'pe-rot';
